@@ -35,6 +35,7 @@
       <button class="tab" data-tab="progress">Progress</button>
       <button class="tab" data-tab="volume">Volume</button>
       <button class="tab" data-tab="bodyweight">Weight</button>
+      <button class="tab" data-tab="library">Library</button>
     </nav>
 
     <!-- SESSION TAB -->
@@ -126,6 +127,14 @@
       </div>
       <div class="bw-chart-wrap"><canvas id="bw-chart"></canvas></div>
       <div id="bw-history" class="bw-history"></div>
+    </div>
+
+    <!-- LIBRARY TAB -->
+    <div id="tab-library" class="tab-content hidden">
+      <div class="label" style="margin-bottom:8px">EXERCISE LIBRARY</div>
+      <input type="text" id="lib-search" class="repo-search" placeholder="Search exercises..." style="width:100%;margin-bottom:8px" />
+      <div id="lib-filters" class="repo-filters"></div>
+      <div id="lib-list" class="repo-list" style="max-height:none"></div>
     </div>
 
   </div>

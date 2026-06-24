@@ -141,6 +141,9 @@ const DEFAULTS = {
   ],
 };
 const DAYS = Object.keys(DEFAULTS);
+const FREEBALL_DAY = "One-off — Freeball";
+// All selectable days = template days + the freeball day (freeball never lives in DEFAULTS)
+function allDays(){ return [...DAYS, FREEBALL_DAY]; }
 
 // ── Science Functions ─────────────────────────────────────────────────────────
 
@@ -274,6 +277,7 @@ function analyseSetHistory(setHistory) {
 
 // ── State ─────────────────────────────────────────────────────────────────────
 let exercises   = JSON.parse(JSON.stringify(DEFAULTS));
+if(!exercises[FREEBALL_DAY]) exercises[FREEBALL_DAY] = [];
 let sessions    = {};
 let progHist    = [];
 let bwData      = [];
@@ -484,7 +488,9 @@ async function renderExercises() {
 
   container.innerHTML = "";
   if (!curEx.length) {
-    container.innerHTML = '<div style="font-size:12px;color:#333;padding:16px 0">No exercises. Swap or add from library.</div>';
+    const isFree = activeDay===FREEBALL_DAY;
+    container.innerHTML = `<div style="font-size:12px;color:#999;padding:16px 0 12px">${isFree?"Freeball session — build it on the fly. Pull any exercise from the library.":"No exercises. Swap or add from library."}</div>`;
+    appendAddExerciseBtn(container);
     return;
   }
 
@@ -599,6 +605,29 @@ async function renderExercises() {
   });
 
   bindExerciseInputs(container, curEx);
+  appendAddExerciseBtn(container);
+}
+
+// Add-exercise-from-library button (used on Freeball + any day)
+function appendAddExerciseBtn(container){
+  const btn=document.createElement("button");
+  btn.className="btn-add-exercise";
+  btn.textContent="＋ Add exercise from library";
+  btn.addEventListener("click",addExerciseToActiveDay);
+  container.appendChild(btn);
+}
+function addExerciseToActiveDay(){
+  openRepoModal(chosen=>{
+    if(!exercises[activeDay]) exercises[activeDay]=[];
+    exercises[activeDay].push({
+      name:chosen.name, sets:3, reps:`${chosen.repMin}–${chosen.repMax}`,
+      repMin:chosen.repMin, repMax:chosen.repMax,
+      weight:chosen.weight||null, unilateral:!!chosen.unilateral
+    });
+    lsSet("il:exercises",exercises);
+    renderExercises();
+    toast(chosen.name+" added");
+  });
 }
 
 function checkFirstSetStruggle(exIdx, setIdx) {
@@ -798,12 +827,14 @@ function renderLastSession() {
   const box=document.getElementById("last-session-box"), none=document.getElementById("no-last-session");
   if (prev) {
     box.classList.remove("hidden"); none.classList.add("hidden");
+    const lbl = activeDay===FREEBALL_DAY ? "FREEBALL" : activeDay.split("—")[1]?.trim().toUpperCase();
     document.getElementById("last-session-title").textContent =
-      `LAST ${activeDay.split("—")[1]?.trim().toUpperCase()} — ${prev.date}`;
+      `LAST ${lbl} — ${prev.date}`;
     document.getElementById("last-session-body").textContent = formatSession(prev);
   } else {
     box.classList.add("hidden"); none.classList.remove("hidden");
-    none.textContent = `No previous ${activeDay.split("—")[1]?.trim()} session on record.`;
+    const lbl = activeDay===FREEBALL_DAY ? "freeball" : activeDay.split("—")[1]?.trim();
+    none.textContent = `No previous ${lbl} session on record.`;
   }
 }
 
@@ -811,9 +842,11 @@ function renderLastSession() {
 function renderDayButtons() {
   const container = document.getElementById("day-buttons");
   container.innerHTML = "";
-  DAYS.forEach(d => {
-    const btn=document.createElement("button"); btn.className="day-btn"+(d===activeDay?" active":"");
-    btn.textContent=d.split("—")[1]?.trim();
+  allDays().forEach(d => {
+    const btn=document.createElement("button");
+    const isFree = d===FREEBALL_DAY;
+    btn.className="day-btn"+(d===activeDay?" active":"")+(isFree?" freeball":"");
+    btn.textContent= isFree ? "＋ Freeball" : d.split("—")[1]?.trim();
     btn.addEventListener("click",()=>{ activeDay=d; liveLog={}; liveNote={}; document.getElementById("workout-alert").classList.add("hidden"); renderDayButtons(); renderExercises(); renderLastSession(); });
     container.appendChild(btn);
   });
@@ -876,6 +909,9 @@ async function saveSession() {
       progHist.unshift({ date:cleanSessDate, day:activeDay, changes });
       lsSet("il:progHist",progHist);
     }
+    // Freeball is a one-off: clear its exercises after saving so it starts empty next time.
+    // History still lives in the sheet keyed by exercise name, so progression carries over.
+    if (activeDay===FREEBALL_DAY) exercises[FREEBALL_DAY]=[];
     lsSet("il:exercises",exercises);
 
     // Clear draft
@@ -926,6 +962,41 @@ function renderRepoList() {
     const item=document.createElement("div"); item.className="repo-item";
     item.innerHTML=`<div><div class="repo-item-name">${ex.name}${ex.unilateral?'<span class="repo-item-badge">UNI</span>':""}</div><div class="repo-item-meta">${ex.group} · ${ex.repMin}–${ex.repMax} reps${ex.weight?" · "+ex.weight+"lb":" · BW"}</div></div><div class="repo-item-add">+</div>`;
     item.addEventListener("click",()=>{ if(repoCallback)repoCallback(ex); document.getElementById("repo-modal").classList.add("hidden"); });
+    list.appendChild(item);
+  });
+}
+
+// ── Library Tab (browse full repo, add to current day) ────────────────────────
+let libFilter="", libSearch="";
+function renderLibraryTab(){
+  renderLibFilters(); renderLibList();
+  const search=document.getElementById("lib-search");
+  if(search && !search._bound){ search._bound=true; search.addEventListener("input",e=>{ libSearch=e.target.value; renderLibList(); }); }
+}
+function renderLibFilters(){
+  const c=document.getElementById("lib-filters"); if(!c)return; c.innerHTML="";
+  ["All",...MUSCLE_GROUPS].forEach(g=>{
+    const btn=document.createElement("button");
+    btn.className="repo-filter"+(((g==="All"&&!libFilter)||g===libFilter)?" active":"");
+    btn.textContent=g;
+    btn.addEventListener("click",()=>{ libFilter=g==="All"?"":g; renderLibFilters(); renderLibList(); });
+    c.appendChild(btn);
+  });
+}
+function renderLibList(){
+  const list=document.getElementById("lib-list"); if(!list)return; list.innerHTML="";
+  const q=libSearch.toLowerCase();
+  const filtered=EXERCISE_REPO.filter(e=>(!libFilter||e.group===libFilter)&&(!q||e.name.toLowerCase().includes(q)));
+  if(!filtered.length){ list.innerHTML='<div style="font-size:11px;color:#666;padding:12px 0">No exercises found.</div>'; return; }
+  filtered.forEach(ex=>{
+    const item=document.createElement("div"); item.className="repo-item";
+    item.innerHTML=`<div><div class="repo-item-name">${ex.name}${ex.unilateral?'<span class="repo-item-badge">UNI</span>':""}</div><div class="repo-item-meta">${ex.group} · ${ex.repMin}–${ex.repMax} reps${ex.weight?" · "+ex.weight+"lb":" · BW"}</div></div><div class="repo-item-add" title="Add to ${activeDay===FREEBALL_DAY?'Freeball':'current'} session">+</div>`;
+    item.addEventListener("click",()=>{
+      if(!exercises[activeDay]) exercises[activeDay]=[];
+      exercises[activeDay].push({ name:ex.name, sets:3, reps:`${ex.repMin}–${ex.repMax}`, repMin:ex.repMin, repMax:ex.repMax, weight:ex.weight||null, unilateral:!!ex.unilateral });
+      lsSet("il:exercises",exercises);
+      toast(`${ex.name} added to ${activeDay===FREEBALL_DAY?"Freeball":activeDay.split("—")[1]?.trim()||activeDay}`);
+    });
     list.appendChild(item);
   });
 }
@@ -1197,11 +1268,13 @@ function switchTab(tab) {
   if(tab==="progress") renderProgress();
   if(tab==="volume")   renderVolumeTab();
   if(tab==="bodyweight") renderBodyweight();
+  if(tab==="library")    renderLibraryTab();
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 async function init() {
   const savedEx=lsGet("il:exercises",null); if(savedEx)exercises=savedEx;
+  if(!exercises[FREEBALL_DAY]) exercises[FREEBALL_DAY]=[];
   const savedPh=lsGet("il:progHist",null);  if(savedPh)progHist=savedPh;
 
   document.getElementById("session-date").value=sessDate;
