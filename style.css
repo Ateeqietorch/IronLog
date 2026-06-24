@@ -58,6 +58,9 @@ html,body { background:var(--bg); color:var(--text); font-family:var(--font-mono
 input[type=number],input[type=text] { background:var(--bg3); border:1px solid var(--border2); color:var(--text); font-family:var(--font-mono); font-size:13px; padding:6px 8px; border-radius:3px; outline:none; transition:border-color .2s; }
 input[type=number] { width:56px; }
 input[type=number].narrow { width:48px; }
+input[type=number].set-w, input[type=number].set-r { width:48px; }
+input[type=number].set-rpe { width:42px; color:var(--gold); border-color:#5a4a1a; }
+input[type=number].set-rpe::placeholder { color:#7a6a3a; font-size:10px; }
 input:focus { border-color:var(--gold); }
 input::placeholder { color:var(--text4); }
 

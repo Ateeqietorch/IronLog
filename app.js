@@ -150,6 +150,64 @@ function calcE1RM(weight, reps) {
   return Math.round(parseFloat(weight) * (1 + parseFloat(reps) / 30) * 10) / 10;
 }
 
+// RPE-adjusted e1RM: estimates reps-in-reserve from RPE, projects to true 1RM.
+// RPE 10 = 0 RIR (took it to failure). Each point below 10 ≈ 1 more rep in reserve.
+// True reps-to-failure ≈ reps + (10 - RPE). Then Epley on that.
+function calcE1RM_RPE(weight, reps, rpe) {
+  if (!weight || !reps || reps <= 0) return 0;
+  const w = parseFloat(weight), r = parseFloat(reps);
+  if (rpe == null || rpe === "" || isNaN(parseFloat(rpe))) return calcE1RM(w, r);
+  const rir = Math.max(0, 10 - parseFloat(rpe));
+  const repsToFailure = r + rir;
+  return Math.round(w * (1 + repsToFailure / 30) * 10) / 10;
+}
+
+// Exercise transfer coefficients — what fraction of a barbell-equivalent e1RM
+// typically carries over to a substitute movement. Used by the swap estimator
+// to suggest a starting weight when you swap exercises. Conservative by design;
+// you can always adjust the suggested number.
+const TRANSFER_COEFF = {
+  // pattern key -> { variants: [names...], coeff (relative to the pattern's "anchor") }
+  // We estimate: targetWeight ≈ (sourceE1RM × targetCoeff / sourceCoeff) de-rated to a working rep target.
+  "Bench Press": 1.00, "Barbell Bench Press": 1.00,
+  "Incline Bench Press": 0.80, "Incline Barbell Press": 0.80,
+  "Dumbbell Bench Press": 0.42, "Incline Dumbbell Press": 0.36, // per-hand
+  "Pec Deck": 0.55, "Chest Fly": 0.45, "Cable Fly": 0.40,
+  "Machine Chest Press": 0.85, "Push-Up": 0.65,
+  "Overhead Press": 0.62, "Barbell Overhead Press": 0.62, "Shoulder Press": 0.62,
+  "Dumbbell Shoulder Press": 0.28, "Machine Shoulder Press": 0.58, "Lateral Raise": 0.12,
+  "Squat": 1.00, "Barbell Squat": 1.00, "Back Squat": 1.00,
+  "Front Squat": 0.82, "Hack Squat": 1.15, "Leg Press": 2.30,
+  "Goblet Squat": 0.45, "Bulgarian Split Squat": 0.30, "Leg Extension": 0.55,
+  "Deadlift": 1.00, "Barbell Deadlift": 1.00, "Conventional Deadlift": 1.00,
+  "Romanian Deadlift": 0.78, "RDL": 0.78, "Stiff Leg Deadlift": 0.72,
+  "Trap Bar Deadlift": 1.05, "Hip Thrust": 1.10, "Leg Curl": 0.40, "Good Morning": 0.55,
+  "Barbell Row": 0.75, "Bent Over Row": 0.75, "Pendlay Row": 0.72,
+  "Dumbbell Row": 0.34, "Seated Cable Row": 0.85, "Lat Pulldown": 0.80,
+  "Pull-Up": 0.95, "Chin-Up": 0.95, "T-Bar Row": 0.78, "Machine Row": 0.82,
+  "Barbell Curl": 0.30, "Dumbbell Curl": 0.14, "Hammer Curl": 0.15,
+  "Preacher Curl": 0.26, "Cable Curl": 0.28,
+  "Tricep Pushdown": 0.30, "Skull Crusher": 0.32, "Overhead Tricep Extension": 0.28,
+  "Close Grip Bench": 0.82, "Dips": 0.70
+};
+
+// Estimate a working weight for a target exercise given a source exercise's
+// recent best e1RM. Returns { weight, reps, confidence } or null if unknown.
+function estimateSwapWeight(sourceName, targetName, sourceE1RM, targetRepMin, targetRepMax) {
+  const sc = TRANSFER_COEFF[sourceName];
+  const tc = TRANSFER_COEFF[targetName];
+  if (!sc || !tc || !sourceE1RM) return null;
+  // target 1RM-equivalent
+  const targetE1RM = sourceE1RM * (tc / sc);
+  // de-rate from 1RM to a working set at the middle of the rep range (Epley inverse)
+  const reps = Math.round((targetRepMin + targetRepMax) / 2) || 8;
+  const working = targetE1RM / (1 + reps / 30);
+  // round to nearest 5 lb
+  const weight = Math.max(5, Math.round(working / 5) * 5);
+  const confidence = (TRANSFER_COEFF[sourceName] && TRANSFER_COEFF[targetName]) ? "estimated" : "rough";
+  return { weight, reps, confidence };
+}
+
 // Volume load: sets × reps × weight
 function calcVolumeLoad(sets) {
   return sets.reduce((sum, s) => {
@@ -270,12 +328,12 @@ async function sheetsCall(params) {
 function parseSessionRows(rows) {
   const result = {};
   for (let i = 1; i < rows.length; i++) {
-    const [rawDate,day,exercise,set,weight,reps,notes,sessionKey] = rows[i];
+    const [rawDate,day,exercise,set,weight,reps,notes,sessionKey,rpe] = rows[i];
     if (!sessionKey || !rawDate) continue;
     const date = cleanDate(rawDate);
     if (!result[sessionKey]) result[sessionKey] = { date, day, exercises:{} };
     if (!result[sessionKey].exercises[exercise]) result[sessionKey].exercises[exercise] = [];
-    result[sessionKey].exercises[exercise].push({ set, weight, reps, notes });
+    result[sessionKey].exercises[exercise].push({ set, weight, reps, notes, rpe });
   }
   return result;
 }
@@ -283,11 +341,11 @@ function parseSessionRows(rows) {
 function parseDraftRows(rows) {
   const result = {};
   for (let i = 1; i < rows.length; i++) {
-    const [rawDate,day,exercise,set,weight,reps,notes,draftKey] = rows[i];
+    const [rawDate,day,exercise,set,weight,reps,notes,draftKey,rpe] = rows[i];
     if (!draftKey || !rawDate) continue;
     const date = cleanDate(rawDate);
     if (!result[draftKey]) result[draftKey] = { date, day, sets:[] };
-    result[draftKey].sets.push({ exercise, set:parseInt(set), weight, reps, notes });
+    result[draftKey].sets.push({ exercise, set:parseInt(set), weight, reps, notes, rpe });
   }
   return result;
 }
@@ -325,6 +383,19 @@ function getSetHistory(history, exName, setIndex) {
   return result; // newest first (history is sorted desc)
 }
 
+// Best e1RM for an exercise across recent sessions (any set), for swap estimation.
+function bestRecentE1RM(history, exName) {
+  let best = 0;
+  for (const sess of (history||[])) {
+    const rows = sess.rows ? sess.rows.filter(r => r.exercise === exName) : [];
+    rows.forEach(r => {
+      const e = calcE1RM_RPE(parseFloat(r.weight)||0, parseFloat(r.reps)||0, r.rpe);
+      if (e > best) best = e;
+    });
+  }
+  return best;
+}
+
 // ── Sync status ───────────────────────────────────────────────────────────────
 function setSyncStatus(state, msg) {
   const el = document.getElementById("sync-status");
@@ -353,7 +424,7 @@ async function saveDraft() {
       rows.push([sessDate,activeDay,ex.name,si+1,
         ex.unilateral ? `L:${st.weightL||""}` : (st.weight||""),
         ex.unilateral ? `L:${st.repsL||""}/R:${st.repsR||""}` : (st.reps||""),
-        liveNote[i]||"", dk
+        liveNote[i]||"", dk, st.rpe||""
       ]);
     });
   });
@@ -389,7 +460,7 @@ function showDraftBanner(draft, key) {
       if (exIdx === -1) return;
       if (!liveLog[exIdx]) liveLog[exIdx] = { sets:[] };
       const si = s.set - 1;
-      liveLog[exIdx].sets[si] = { weight:s.weight, reps:s.reps };
+      liveLog[exIdx].sets[si] = { weight:s.weight, reps:s.reps, rpe:s.rpe||"" };
     });
     renderDayButtons(); renderExercises(); renderLastSession();
     banner.classList.add("hidden"); toast("Draft restored");
@@ -485,12 +556,14 @@ async function renderExercises() {
       } else {
         const curW = cur?.weight || "";
         const curR = cur?.reps || "";
-        const e1rmNow = curW && curR ? calcE1RM(parseFloat(curW), parseFloat(curR)) : 0;
+        const curRpe = cur?.rpe || "";
+        const e1rmNow = curW && curR ? calcE1RM_RPE(parseFloat(curW), parseFloat(curR), curRpe) : 0;
         setsHTML += `<div class="set-row" style="margin-bottom:6px">
           <div class="set-num">S${si+1}</div>
           <div class="set-target">→ <span class="target-val">${target.weight}lb × ${target.reps}</span></div>
           <input type="number" class="set-w" data-ex="${i}" data-set="${si}" placeholder="lb" value="${curW}" />
           <input type="number" class="set-r" data-ex="${i}" data-set="${si}" placeholder="reps" value="${curR}" />
+          <input type="number" class="set-rpe" data-ex="${i}" data-set="${si}" placeholder="RPE" min="1" max="10" step="0.5" value="${curRpe}" title="Rate of Perceived Exertion 1–10" />
           <button class="btn-check ${hitVal?'hit':''}" data-ex="${i}" data-set="${si}" title="Mark as hit">✓</button>
           ${e1rmNow ? `<span class="e1rm-display">e1RM:<span class="e1rm-val">${e1rmNow}</span></span>` : ""}
         </div>`;
@@ -594,23 +667,23 @@ function checkFirstSetStruggle(exIdx, setIdx) {
 
 function bindExerciseInputs(container, curEx) {
   // Standard inputs
-  container.querySelectorAll(".set-w,.set-r").forEach(inp => {
+  container.querySelectorAll(".set-w,.set-r,.set-rpe").forEach(inp => {
     inp.addEventListener("input", e => {
       const i=parseInt(e.target.dataset.ex), si=parseInt(e.target.dataset.set);
-      const field=e.target.classList.contains("set-w")?"weight":"reps";
+      const field=e.target.classList.contains("set-w")?"weight":e.target.classList.contains("set-r")?"reps":"rpe";
       if (!liveLog[i]) liveLog[i]={sets:[]};
       if (!liveLog[i].sets[si]) liveLog[i].sets[si]={};
       liveLog[i].sets[si][field]=e.target.value;
-      // Update e1RM display
+      // Update e1RM display (RPE-adjusted when RPE present)
       const row = e.target.closest(".set-row");
       const st = liveLog[i].sets[si];
       if (st.weight && st.reps) {
-        const e1rm = calcE1RM(parseFloat(st.weight), parseFloat(st.reps));
+        const e1rm = calcE1RM_RPE(parseFloat(st.weight), parseFloat(st.reps), st.rpe);
         let e1rmEl = row.querySelector(".e1rm-display");
         if (!e1rmEl) { e1rmEl=document.createElement("span"); e1rmEl.className="e1rm-display"; row.appendChild(e1rmEl); }
         e1rmEl.innerHTML = `e1RM:<span class="e1rm-val">${e1rm}</span>`;
       }
-      checkFirstSetStruggle(i, si);
+      if (field!=="rpe") checkFirstSetStruggle(i, si);
       saveDraft();
     });
   });
@@ -760,11 +833,11 @@ async function saveSession() {
       if (ex.unilateral) {
         if (!st.weightL&&!st.weightR&&!st.repsL&&!st.repsR) return;
         hasData=true;
-        rows.push([cleanSessDate,activeDay,ex.name,si+1,`L:${st.weightL||"0"}/R:${st.weightR||"0"}`,`L:${st.repsL||"0"}/R:${st.repsR||"0"}`,liveNote[i]||"",sessionKey]);
+        rows.push([cleanSessDate,activeDay,ex.name,si+1,`L:${st.weightL||"0"}/R:${st.weightR||"0"}`,`L:${st.repsL||"0"}/R:${st.repsR||"0"}`,liveNote[i]||"",sessionKey,st.rpe||""]);
       } else {
         if (!st.weight&&!st.reps) return;
         hasData=true;
-        rows.push([cleanSessDate,activeDay,ex.name,si+1,st.weight||"",st.reps||"",liveNote[i]||"",sessionKey]);
+        rows.push([cleanSessDate,activeDay,ex.name,si+1,st.weight||"",st.reps||"",liveNote[i]||"",sessionKey,st.rpe||""]);
       }
     });
   });
@@ -864,17 +937,36 @@ function openSwapModal(idx) {
   document.getElementById("swap-replacing").textContent="Replacing: "+ex.name;
   document.getElementById("swap-manual-form").classList.add("hidden");
   document.getElementById("swap-modal").classList.remove("hidden");
+  // source e1RM for estimation
+  const srcE1RM = bestRecentE1RM(dayHistory[activeDay]||[], ex.name);
   document.getElementById("swap-from-library").onclick=()=>{
     document.getElementById("swap-modal").classList.add("hidden");
     openRepoModal(chosen=>{
-      exercises[activeDay][swapIdx]={...exercises[activeDay][swapIdx],name:chosen.name,weight:chosen.weight||exercises[activeDay][swapIdx].weight,repMin:chosen.repMin,repMax:chosen.repMax,reps:`${chosen.repMin}–${chosen.repMax}`,unilateral:chosen.unilateral};
-      delete liveLog[swapIdx]; lsSet("il:exercises",exercises); renderExercises(); toast("Exercise swapped");
+      const est = estimateSwapWeight(ex.name, chosen.name, srcE1RM, chosen.repMin, chosen.repMax);
+      const newWeight = chosen.weight || (est ? est.weight : exercises[activeDay][swapIdx].weight);
+      exercises[activeDay][swapIdx]={...exercises[activeDay][swapIdx],name:chosen.name,weight:newWeight,repMin:chosen.repMin,repMax:chosen.repMax,reps:`${chosen.repMin}–${chosen.repMax}`,unilateral:chosen.unilateral};
+      delete liveLog[swapIdx]; lsSet("il:exercises",exercises); renderExercises();
+      toast(est && !chosen.weight ? `Swapped — est. ${est.weight}lb from your ${ex.name} e1RM` : "Exercise swapped");
     });
   };
   document.getElementById("swap-manual").onclick=()=>{
     document.getElementById("swap-name").value=ex.name;
     document.getElementById("swap-weight").value=ex.weight||"";
     document.getElementById("swap-manual-form").classList.remove("hidden");
+    // live estimate as you type a known exercise name
+    const nameInput=document.getElementById("swap-name");
+    const weightInput=document.getElementById("swap-weight");
+    let hintEl=document.getElementById("swap-est-hint");
+    if(!hintEl){ hintEl=document.createElement("div"); hintEl.id="swap-est-hint"; hintEl.style.cssText="font-size:11px;color:#0a7d3c;font-weight:600;margin-top:4px"; weightInput.parentElement.appendChild(hintEl); }
+    const updateHint=()=>{
+      const tgt=nameInput.value.trim();
+      const est=estimateSwapWeight(ex.name, tgt, srcE1RM, ex.repMin||8, ex.repMax||12);
+      if(est && srcE1RM){ hintEl.textContent=`💡 Est. ${est.weight}lb (from ${ex.name} e1RM ${srcE1RM})`; hintEl.dataset.w=est.weight; }
+      else { hintEl.textContent=""; delete hintEl.dataset.w; }
+    };
+    nameInput.oninput=updateHint; updateHint();
+    hintEl.onclick=()=>{ if(hintEl.dataset.w) weightInput.value=hintEl.dataset.w; };
+    hintEl.style.cursor="pointer"; hintEl.title="Tap to use this estimate";
   };
   document.getElementById("swap-confirm").onclick=()=>{
     const name=document.getElementById("swap-name").value.trim(); if(!name)return;
