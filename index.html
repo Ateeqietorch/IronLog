@@ -101,13 +101,16 @@
         <div id="vol-week-label" class="vol-week-label"></div>
         <button class="btn-ghost" id="vol-next">›</button>
       </div>
-      <div class="section-title">Weekly Volume by Muscle Group</div>
+      <div class="section-title">Weekly Hard Sets by Muscle</div>
       <div id="volume-bars"></div>
       <div class="vol-legend">
-        <span class="vol-leg-item"><span class="vol-dot under"></span>Under MEV (&lt;10 sets)</span>
-        <span class="vol-leg-item"><span class="vol-dot ok"></span>Optimal (10–20 sets)</span>
-        <span class="vol-leg-item"><span class="vol-dot over"></span>Over MRV (&gt;20 sets)</span>
+        <span class="vol-leg-item"><span class="vol-dot under"></span>Under MEV</span>
+        <span class="vol-leg-item"><span class="vol-dot ok"></span>Growth zone</span>
+        <span class="vol-leg-item"><span class="vol-dot over"></span>Over MRV</span>
       </div>
+      <div class="vol-hint">Only sets at RPE 7+ count as hard sets. Tap a muscle name to set its own MEV/MRV.</div>
+      <div class="section-title mt">Effort Distribution</div>
+      <div id="rpe-distribution"></div>
       <div class="section-title mt">Session Volume Load</div>
       <div class="chart-wrap"><canvas id="vol-chart"></canvas></div>
     </div>

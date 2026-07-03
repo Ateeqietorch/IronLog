@@ -9,8 +9,35 @@ const STRUGGLE_THRESHOLD  = 0.15; // 15% below target reps on set 1
 const WEIGHT_DROP_PCT     = 0.12; // 12% weight reduction when struggling
 const STAGNATION_SESSIONS = 3;    // consecutive sessions same e1RM = stagnant
 const PERF_LOSS_SESSIONS  = 2;    // consecutive drops in e1RM = declining
-const MEV_SETS            = 10;   // minimum effective volume per muscle/week
-const MRV_SETS            = 20;   // maximum recoverable volume per muscle/week
+const MEV_SETS            = 10;   // fallback minimum effective volume per muscle/week
+const MRV_SETS            = 20;   // fallback maximum recoverable volume per muscle/week
+const HARD_SET_RPE        = 7;    // sets at/above this RPE count as "hard" (growth-driving)
+
+// Per-muscle weekly volume landmarks (hard sets). Based on typical hypertrophy
+// ranges — smaller muscles recover faster and tolerate/need less; back & delts
+// tolerate more. These are DEFAULTS; user can override per muscle (saved locally).
+const MUSCLE_LANDMARKS = {
+  "Chest":     { mev:10, mrv:20 },
+  "Shoulders": { mev:8,  mrv:24 },  // side delts tolerate high volume
+  "Triceps":   { mev:8,  mrv:16 },
+  "Back":      { mev:10, mrv:24 },
+  "Biceps":    { mev:8,  mrv:18 },
+  "Quads":     { mev:8,  mrv:18 },
+  "Hamstrings":{ mev:6,  mrv:14 },  // recover slower
+  "Glutes":    { mev:6,  mrv:16 },
+  "Calves":    { mev:8,  mrv:20 },
+  "Other":     { mev:0,  mrv:99 },
+};
+function getLandmarks(group){
+  const custom = lsGet("il:landmarks", {});
+  const base = MUSCLE_LANDMARKS[group] || { mev:MEV_SETS, mrv:MRV_SETS };
+  return { mev: (custom[group]?.mev ?? base.mev), mrv: (custom[group]?.mrv ?? base.mrv) };
+}
+function setLandmark(group, mev, mrv){
+  const custom = lsGet("il:landmarks", {});
+  custom[group] = { mev, mrv };
+  lsSet("il:landmarks", custom);
+}
 
 // Muscle group mapping for volume tracking
 const MUSCLE_GROUPS_MAP = {
@@ -1169,24 +1196,61 @@ async function renderVolumeTab() {
     setSyncStatus("synced");
   } catch(e) { setSyncStatus("error",e.message); }
 
-  // Count sets per muscle group
-  const muscleSets={};
-  Object.keys(MUSCLE_GROUPS_MAP).forEach(g=>muscleSets[g]=0);
+  // Count sets per muscle group — split into HARD sets (RPE≥7 or unmarked working
+  // sets) vs total. Hard sets are what drive hypertrophy; junk sets (RPE≤6) don't.
+  const muscleHard={}, muscleTotal={};
+  Object.keys(MUSCLE_GROUPS_MAP).forEach(g=>{muscleHard[g]=0;muscleTotal[g]=0;});
+  // RPE distribution across all logged sets this week
+  const rpeDist={ "≤6":0, "7":0, "7.5":0, "8":0, "8.5":0, "9":0, "9.5":0, "10":0 };
+  let rpeLogged=0, rpeTotal=0;
   for(let i=1;i<weekRows.length;i++){
-    const [,, exName]=weekRows[i];
+    const row=weekRows[i];
+    const exName=row[2];
+    const rpe=row[8];               // 9th column
     const group=getMuscleGroup(exName);
-    if(muscleSets[group]!==undefined) muscleSets[group]++;
+    if(muscleTotal[group]!==undefined){
+      muscleTotal[group]++;
+      const rpeVal=parseFloat(rpe);
+      // A set counts as "hard" if RPE≥7, OR if no RPE was logged (assume it was a
+      // real working set — you don't log warmups here).
+      const isHard = isNaN(rpeVal) ? true : rpeVal>=HARD_SET_RPE;
+      if(isHard) muscleHard[group]++;
+      // distribution
+      rpeTotal++;
+      if(!isNaN(rpeVal)){
+        rpeLogged++;
+        if(rpeVal<=6) rpeDist["≤6"]++;
+        else if(rpeVal<7.5) rpeDist["7"]++;
+        else if(rpeVal<8) rpeDist["7.5"]++;
+        else if(rpeVal<8.5) rpeDist["8"]++;
+        else if(rpeVal<9) rpeDist["8.5"]++;
+        else if(rpeVal<9.5) rpeDist["9"]++;
+        else if(rpeVal<10) rpeDist["9.5"]++;
+        else rpeDist["10"]++;
+      }
+    }
   }
 
-  // Volume bars
+  // Volume bars — hard sets vs per-muscle MEV/MRV landmarks
   const barsEl=document.getElementById("volume-bars"); barsEl.innerHTML="";
-  Object.entries(muscleSets).sort((a,b)=>b[1]-a[1]).forEach(([group,count])=>{
-    const status=count<MEV_SETS?"under":count>MRV_SETS?"over":"ok";
-    const pct=Math.min((count/MRV_SETS)*100,100);
+  Object.entries(muscleHard).sort((a,b)=>b[1]-a[1]).forEach(([group,hard])=>{
+    if(group==="Other" && muscleTotal[group]===0) return;
+    const {mev,mrv}=getLandmarks(group);
+    const total=muscleTotal[group];
+    const status=hard<mev?"under":hard>mrv?"over":"ok";
+    const pct=Math.min((hard/mrv)*100,100);
+    // MEV marker position on the track
+    const mevPct=Math.min((mev/mrv)*100,100);
+    const junkNote = total>hard ? ` <span style="color:#666">(${total-hard} junk)</span>` : "";
     const div=document.createElement("div"); div.className="vol-bar-row";
-    div.innerHTML=`<div class="vol-bar-label"><span class="vol-bar-name">${group}</span><span class="vol-bar-count ${status}">${count} sets</span></div><div class="vol-bar-track"><div class="vol-bar-fill ${status}" style="width:${pct}%"></div></div>`;
+    div.innerHTML=`<div class="vol-bar-label"><span class="vol-bar-name">${group}</span><span class="vol-bar-count ${status}">${hard} hard${junkNote}</span></div><div class="vol-bar-track"><div class="vol-bar-mev" style="left:${mevPct}%" title="MEV ${mev}"></div><div class="vol-bar-fill ${status}" style="width:${pct}%"></div></div><div class="vol-bar-range">MEV ${mev} · MRV ${mrv}</div>`;
+    div.querySelector(".vol-bar-name").style.cursor="pointer";
+    div.querySelector(".vol-bar-name").addEventListener("click",()=>editLandmark(group));
     barsEl.appendChild(div);
   });
+
+  // RPE distribution summary — how much of your volume lands in the 7–9 sweet spot
+  renderRpeDistribution(rpeDist, rpeLogged, rpeTotal);
 
   // Session volume load chart (all sessions)
   const volData=Object.values(sessions).sort((a,b)=>a.date.localeCompare(b.date)).map(sess=>{
@@ -1211,10 +1275,51 @@ async function renderVolumeTab() {
   }
 }
 
+// ── Volume helpers ────────────────────────────────────────────────────────────
+function editLandmark(group){
+  const cur=getLandmarks(group);
+  const mev=prompt(`${group} — weekly MEV (minimum hard sets):`, cur.mev);
+  if(mev===null) return;
+  const mrv=prompt(`${group} — weekly MRV (maximum hard sets):`, cur.mrv);
+  if(mrv===null) return;
+  const mevN=parseInt(mev), mrvN=parseInt(mrv);
+  if(isNaN(mevN)||isNaN(mrvN)||mrvN<=mevN){ toast("MRV must be greater than MEV"); return; }
+  setLandmark(group, mevN, mrvN);
+  toast(`${group}: MEV ${mevN} · MRV ${mrvN}`);
+  renderVolumeTab();
+}
+
+function renderRpeDistribution(dist, logged, total){
+  const el=document.getElementById("rpe-distribution");
+  if(!el) return;
+  if(!logged){
+    el.innerHTML=`<div class="rpe-dist-empty">No RPE logged this week. Log RPE per set to see effort distribution and hard-set accuracy.</div>`;
+    return;
+  }
+  const sweet = (dist["7"]+dist["7.5"]+dist["8"]+dist["8.5"]+dist["9"]);
+  const junk  = dist["≤6"];
+  const grind = dist["9.5"]+dist["10"];
+  const sweetPct=Math.round(sweet/logged*100);
+  const max=Math.max(...Object.values(dist),1);
+  const bars=Object.entries(dist).map(([k,v])=>{
+    const h=Math.round(v/max*60)+2;
+    const zone = k==="≤6"?"junk":(k==="9.5"||k==="10")?"grind":"sweet";
+    return `<div class="rpe-col"><div class="rpe-bar ${zone}" style="height:${h}px" title="${v} sets @ RPE ${k}"></div><div class="rpe-x">${k}</div></div>`;
+  }).join("");
+  let verdict, vclass;
+  if(sweetPct>=70){ verdict=`${sweetPct}% in the 7–9 sweet spot — dialed in.`; vclass="ok"; }
+  else if(junk> sweet){ verdict=`Too many easy sets (${junk} at RPE≤6). Push closer to failure.`; vclass="under"; }
+  else if(grind>=logged*0.4){ verdict=`Lots of RPE 9.5–10 (${grind} sets) — watch fatigue/recovery.`; vclass="over"; }
+  else { verdict=`${sweetPct}% in the 7–9 sweet spot. Aim for ~70%+.`; vclass=""; }
+  el.innerHTML=`
+    <div class="rpe-dist-title">EFFORT DISTRIBUTION <span style="color:#555">· ${logged}/${total} sets rated</span></div>
+    <div class="rpe-chart">${bars}</div>
+    <div class="rpe-verdict ${vclass}">${verdict}</div>`;
+}
+
 // ── Bodyweight Tab ────────────────────────────────────────────────────────────
 function renderBodyweight() {
   const canvas=document.getElementById("bw-chart");
-  if(bwChart){bwChart.destroy();bwChart=null;}
   if(bwData.length>0){
     bwChart=new Chart(canvas,{
       type:"line",

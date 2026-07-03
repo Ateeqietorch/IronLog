@@ -201,7 +201,25 @@ input::placeholder { color:var(--text4); }
 .vol-bar-count.under { color:var(--red); }
 .vol-bar-count.ok { color:var(--green); }
 .vol-bar-count.over { color:var(--yellow); }
-.vol-bar-track { height:6px; background:var(--border2); border-radius:3px; overflow:hidden; }
+.vol-bar-track { height:6px; background:var(--border2); border-radius:3px; overflow:hidden; position:relative; }
+.vol-bar-mev { position:absolute; top:-2px; bottom:-2px; width:2px; background:var(--text3); opacity:.7; z-index:2; }
+.vol-bar-range { font-size:8px; color:#555; font-family:var(--font-mono); margin-top:2px; letter-spacing:.04em; }
+.vol-hint { font-size:9px; color:#666; margin-top:8px; line-height:1.5; font-style:italic; }
+/* RPE distribution */
+#rpe-distribution { margin-top:4px; }
+.rpe-dist-title { font-size:9px; color:var(--text3); letter-spacing:.1em; text-transform:uppercase; margin-bottom:8px; }
+.rpe-dist-empty { font-size:10px; color:#666; padding:10px 0; line-height:1.5; font-style:italic; }
+.rpe-chart { display:flex; align-items:flex-end; gap:6px; height:78px; padding:0 4px; }
+.rpe-col { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:flex-end; gap:4px; }
+.rpe-bar { width:100%; border-radius:2px 2px 0 0; min-height:2px; transition:height .4s; }
+.rpe-bar.junk { background:var(--red); opacity:.6; }
+.rpe-bar.sweet { background:var(--green); }
+.rpe-bar.grind { background:var(--yellow); }
+.rpe-x { font-size:8px; color:#555; font-family:var(--font-mono); }
+.rpe-verdict { font-size:10px; margin-top:10px; padding:8px 10px; border-radius:3px; background:var(--bg3); border:1px solid var(--border2); color:var(--text3); line-height:1.4; }
+.rpe-verdict.ok { border-color:#2a3a2a; color:var(--green); }
+.rpe-verdict.under { border-color:#3a2a2a; color:var(--red); }
+.rpe-verdict.over { border-color:#3a3a2a; color:var(--yellow); }
 .vol-bar-fill { height:100%; border-radius:3px; transition:width .4s; }
 .vol-bar-fill.under { background:var(--red); }
 .vol-bar-fill.ok { background:var(--green); }
