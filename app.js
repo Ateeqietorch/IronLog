@@ -180,6 +180,14 @@ function calcE1RM(weight, reps) {
   return Math.round(parseFloat(weight) * (1 + parseFloat(reps) / 30) * 10) / 10;
 }
 
+// A row only counts as a real working set if it has positive weight AND reps.
+// Abandoned/mis-logged rows (0 reps, blank/0 weight) must be ignored everywhere —
+// otherwise they poison e1RM, hard-set counts, and progression targets.
+function isWorkingSet(w, r) {
+  const wt = parseFloat(w), rp = parseFloat(r);
+  return !isNaN(wt) && !isNaN(rp) && wt > 0 && rp > 0;
+}
+
 // RPE-adjusted e1RM: estimates reps-in-reserve from RPE, projects to true 1RM.
 // RPE 10 = 0 RIR (took it to failure). Each point below 10 ≈ 1 more rep in reserve.
 // True reps-to-failure ≈ reps + (10 - RPE). Then Epley on that.
@@ -256,7 +264,7 @@ function computeTarget(ex, setIndex, history) {
 
   for (const sess of history) {
     const s = sess.sets && sess.sets[setIndex];
-    if (s && s.weight && s.reps) {
+    if (s && isWorkingSet(s.weight, s.reps)) {
       // Always use the higher of: what was logged vs current program weight
       lastWeight = Math.max(parseFloat(s.weight), programWeight);
       lastReps   = parseFloat(s.reps);
@@ -275,10 +283,11 @@ function computeTarget(ex, setIndex, history) {
 // Analyse set history for stagnation and decline per set index
 // Returns { status: 'stagnant'|'declining'|'progressing'|'new', streak }
 function analyseSetHistory(setHistory) {
-  // setHistory = [{weight, reps}] newest first
-  if (setHistory.length < 2) return { status: "new", streak: 0 };
+  // setHistory = [{weight, reps}] newest first — ignore junk rows entirely
+  const clean = setHistory.filter(s => isWorkingSet(s.weight, s.reps));
+  if (clean.length < 2) return { status: "new", streak: 0 };
 
-  const e1rms = setHistory.map(s => calcE1RM(parseFloat(s.weight)||0, parseFloat(s.reps)||0));
+  const e1rms = clean.map(s => calcE1RM(parseFloat(s.weight)||0, parseFloat(s.reps)||0));
 
   // Check for consecutive decline
   let declineStreak = 0;
@@ -420,6 +429,7 @@ function bestRecentE1RM(history, exName) {
   for (const sess of (history||[])) {
     const rows = sess.rows ? sess.rows.filter(r => r.exercise === exName) : [];
     rows.forEach(r => {
+      if (!isWorkingSet(r.weight, r.reps)) return;
       const e = calcE1RM_RPE(parseFloat(r.weight)||0, parseFloat(r.reps)||0, r.rpe);
       if (e > best) best = e;
     });
@@ -1206,7 +1216,10 @@ async function renderVolumeTab() {
   for(let i=1;i<weekRows.length;i++){
     const row=weekRows[i];
     const exName=row[2];
+    const weight=row[4], reps=row[5];
     const rpe=row[8];               // 9th column
+    // Skip junk rows — abandoned/mis-logged sets don't count as volume.
+    if(!isWorkingSet(weight, reps)) continue;
     const group=getMuscleGroup(exName);
     if(muscleTotal[group]!==undefined){
       muscleTotal[group]++;
@@ -1258,7 +1271,7 @@ async function renderVolumeTab() {
     Object.values(sess.exercises).forEach(sets=>{
       sets.forEach(s=>{
         const w=parseFloat(s.weight)||0, r=parseFloat(s.reps)||0;
-        total+=w*r;
+        if(w>0 && r>0) total+=w*r;
       });
     });
     return {date:sess.date, vol:total};
