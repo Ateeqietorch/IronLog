@@ -54,6 +54,13 @@
         <input type="date" id="session-date" class="date-input" />
         <div class="label mt">TRAINING DAY</div>
         <div id="day-buttons" class="day-buttons"></div>
+        <div id="override-row" class="override-row hidden">
+          <label class="override-toggle">
+            <input type="checkbox" id="override-toggle" />
+            <span>Override Today</span>
+          </label>
+          <div id="override-hint" class="override-hint hidden">Changes apply to today's session only — the permanent program is untouched.</div>
+        </div>
         <div id="last-session-box" class="last-session hidden">
           <div id="last-session-title" class="last-session-title"></div>
           <pre id="last-session-body" class="last-session-body"></pre>

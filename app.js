@@ -169,8 +169,12 @@ const DEFAULTS = {
 };
 const DAYS = Object.keys(DEFAULTS);
 const FREEBALL_DAY = "One-off — Freeball";
-// All selectable days = template days + the freeball day (freeball never lives in DEFAULTS)
-function allDays(){ return [...DAYS, FREEBALL_DAY]; }
+// User-added permanent days (e.g. saved from an override session), beyond the 5 defaults.
+let customDays = lsGet("il:customDays", []);
+// All program days = template days + any custom days the user has saved permanently.
+function allProgramDays(){ return [...DAYS, ...customDays]; }
+// All selectable days = program days + the freeball day (freeball never lives in DEFAULTS)
+function allDays(){ return [...allProgramDays(), FREEBALL_DAY]; }
 
 // ── Science Functions ─────────────────────────────────────────────────────────
 
@@ -255,9 +259,64 @@ function calcVolumeLoad(sets) {
   }, 0);
 }
 
-// Given target reps + current weight, compute smart target for next set
-// Returns { weight, reps, reason }
-function computeTarget(ex, setIndex, history) {
+function median(nums) {
+  if (!nums.length) return 0;
+  const s = [...nums].sort((a, b) => a - b);
+  const mid = Math.floor(s.length / 2);
+  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+}
+
+// Double-progression target for a standard (bilateral) exercise: one working
+// weight shared across all sets. Uses the MEDIAN weight from the most recent
+// session with data for this exercise (excluding 0-rep/failed sets), and only
+// bumps weight once ≥75% of that session's valid sets hit repMax. A 0-rep set
+// in the last session (weight logged, reps=0) surfaces a back-off suggestion
+// but is otherwise excluded from the target math.
+// Returns { weight, reps, e1rm, reason, backoff }
+function computeTarget(ex, history) {
+  const programWeight = ex.weight || 0;
+
+  let lastRows = null;
+  for (const sess of history) {
+    const rows = (sess.rows || [])
+      .filter(r => r.exercise === ex.name)
+      .sort((a, b) => a.set - b.set);
+    if (rows.length) { lastRows = rows; break; }
+  }
+
+  if (!lastRows) {
+    return { weight: programWeight, reps: ex.repMin, e1rm: calcE1RM(programWeight, ex.repMin), reason: "new", backoff: null };
+  }
+
+  const valid  = lastRows.filter(r => isWorkingSet(r.weight, r.reps));
+  // A "failed" set has a logged weight but 0 reps — abandoned mid-set.
+  const failed = lastRows.filter(r => !isWorkingSet(r.weight, r.reps) && parseFloat(r.weight) > 0 && parseFloat(r.reps) === 0);
+
+  if (!valid.length) {
+    const dropped = roundToNearest(programWeight * (1 - WEIGHT_DROP_PCT), 2.5);
+    const backoff = failed.length ? { weight: dropped, reps: ex.repMin } : null;
+    return { weight: dropped, reps: ex.repMin, e1rm: calcE1RM(dropped, ex.repMin), reason: "backoff", backoff };
+  }
+
+  const medWeight = median(valid.map(r => parseFloat(r.weight)));
+  const medReps   = Math.round(median(valid.map(r => parseFloat(r.reps))));
+  const hitRatio  = valid.filter(r => parseFloat(r.reps) >= ex.repMax).length / valid.length;
+  const bump      = LOWER_DAYS.some(d => d === ex._day) ? 10 : 5;
+  const backoff   = failed.length ? { weight: roundToNearest(medWeight * (1 - WEIGHT_DROP_PCT), 2.5), reps: ex.repMin } : null;
+
+  if (hitRatio >= 0.75) {
+    const weight = medWeight + bump;
+    return { weight, reps: ex.repMin, e1rm: calcE1RM(weight, ex.repMin), reason: "progress", backoff };
+  }
+  const targetReps = Math.min(medReps + 1, ex.repMax);
+  return { weight: medWeight, reps: targetReps, e1rm: calcE1RM(medWeight, targetReps), reason: "maintain", backoff };
+}
+
+// Legacy per-set-index target logic, kept ONLY for unilateral exercises. Their
+// weight/reps are stored as "L:x/R:y" strings which isWorkingSet can't parse,
+// so the median/75% rule above can't apply to them without also teaching every
+// consumer to parse per-side values — out of scope for the progression fix.
+function computeTargetPerSet(ex, setIndex, history) {
   const programWeight = ex.weight || 0;
   let lastWeight = programWeight;
   let lastReps   = ex.repMax;
@@ -265,7 +324,6 @@ function computeTarget(ex, setIndex, history) {
   for (const sess of history) {
     const s = sess.sets && sess.sets[setIndex];
     if (s && isWorkingSet(s.weight, s.reps)) {
-      // Always use the higher of: what was logged vs current program weight
       lastWeight = Math.max(parseFloat(s.weight), programWeight);
       lastReps   = parseFloat(s.reps);
       break;
@@ -335,6 +393,8 @@ let selectedE1RMEx = null;
 let repoFilter  = "";
 let repoSearch  = "";
 let renderedTargets = {}; // { exIdx: { setIdx: {weight, reps} } } — set at render time
+let overrideMode = false;      // "Override Today" — edits apply to overrideExercises only
+let overrideExercises = null;  // temp copy of the day's exercise list, used only while overrideMode is on
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 function todayStr() {
@@ -352,6 +412,18 @@ function cleanDate(raw) {
 function lsGet(k,fb) { try { const v=localStorage.getItem(k); return v?JSON.parse(v):fb; } catch { return fb; } }
 function lsSet(k,v) { try { localStorage.setItem(k,JSON.stringify(v)); } catch {} }
 function roundToNearest(val, nearest) { return Math.round(val / nearest) * nearest; }
+
+// ── Session override mode ────────────────────────────────────────────────────
+// Returns the exercise list currently being edited: the permanent program for
+// activeDay, or a throwaway copy of it while "Override Today" is on. Overrides
+// never touch `exercises`/localStorage — only saveSession's progression update
+// (matched by exercise name) is allowed to feed back into the permanent program.
+function activeExArray() {
+  if (overrideMode) return overrideExercises;
+  if (!exercises[activeDay]) exercises[activeDay] = [];
+  return exercises[activeDay];
+}
+function persistExercises() { if (!overrideMode) lsSet("il:exercises", exercises); }
 
 // ── Google Sheets ─────────────────────────────────────────────────────────────
 async function sheetsCall(params) {
@@ -401,14 +473,30 @@ function formatSession(sess) {
   ).join("\n\n");
 }
 
+// Flatten a parsed session's { exercises: { name: [{set,weight,reps,rpe}] } }
+// shape into a flat rows array, for the history helpers below.
+function sessionToRows(sess) {
+  const rows = [];
+  Object.entries(sess.exercises).forEach(([exercise, sets]) => {
+    sets.forEach(s => rows.push({ exercise, set: parseInt(s.set), weight: s.weight, reps: s.reps, rpe: s.rpe }));
+  });
+  return rows;
+}
+
 // ── Load day history ──────────────────────────────────────────────────────────
+// Built from the already-loaded `sessions` state rather than a network call, so
+// it also picks up "{day} (Override)" sessions — exercise history is tracked by
+// exercise name regardless of whether it was logged in an override session.
 async function loadDayHistory(day) {
   if (dayHistory[day]) return dayHistory[day];
-  try {
-    const d = await sheetsCall({ action:"read_day_history", day, limit:"10" });
-    dayHistory[day] = d.sessions || [];
-    return dayHistory[day];
-  } catch { return []; }
+  const overrideLabel = `${day} (Override)`;
+  const rows = Object.values(sessions)
+    .filter(s => s.day === day || s.day === overrideLabel)
+    .sort((a,b) => b.date.localeCompare(a.date))
+    .slice(0, 10)
+    .map(s => ({ date: s.date, rows: sessionToRows(s) }));
+  dayHistory[day] = rows;
+  return rows;
 }
 
 // Get per-set history for an exercise across past sessions
@@ -456,7 +544,7 @@ function toast(msg) {
 
 // ── Draft ─────────────────────────────────────────────────────────────────────
 async function saveDraft() {
-  const curEx = exercises[activeDay]||[];
+  const curEx = activeExArray()||[];
   const dk = `DRAFT_${sessDate}_${activeDay}`;
   const rows = [];
   curEx.forEach((ex,i) => {
@@ -515,7 +603,7 @@ function showDraftBanner(draft, key) {
 
 // ── Render exercises ──────────────────────────────────────────────────────────
 async function renderExercises() {
-  const curEx = exercises[activeDay]||[];
+  const curEx = activeExArray()||[];
   document.getElementById("active-day-label").textContent = activeDay;
   const container = document.getElementById("exercises-list");
   container.innerHTML = '<div style="font-size:10px;color:#444;padding:8px 0">Loading history...</div>';
@@ -546,15 +634,35 @@ async function renderExercises() {
     const isCompound = ex.repMax <= 10;
     const isFirstCompound = i === 0 && isCompound;
 
+    // In-session fatigue context: preceding same-muscle-group exercises add
+    // up (compound=3pts, isolation=1pt). Above 4 points, shift the rep target
+    // toward the upper half of the rep range instead of the usual bottom-up climb.
+    const exGroup = getMuscleGroup(ex.name);
+    const fatigueScore = curEx.slice(0, i).reduce((score, other) => {
+      if (getMuscleGroup(other.name) !== exGroup) return score;
+      return score + (other.repMax <= 10 ? 3 : 1);
+    }, 0);
+    const highFatigue = fatigueScore > 4;
+    const upperHalfReps = Math.ceil((ex.repMin + ex.repMax) / 2);
+
+    // Bilateral exercises share one target across all sets (double progression).
+    // Unilateral exercises keep the legacy per-set-index target.
+    const exTarget = ex.unilateral ? null : computeTarget({ ...ex, _day: activeDay }, history);
+
     // Build per-set targets and analysis
     const setTargets = [];
     const setStatuses = [];
     renderedTargets[i] = {};
     for (let si = 0; si < ex.sets; si++) {
       const setHist = getSetHistory(history, ex.name, si);
-      const target = computeTarget({ ...ex, _day: activeDay }, si, history.map(h => ({
-        sets: (h.rows||[]).filter(r => r.exercise === ex.name).map(r => ({ weight:r.weight, reps:r.reps }))
-      })));
+      let target = ex.unilateral
+        ? computeTargetPerSet({ ...ex, _day: activeDay }, si, history.map(h => ({
+            sets: (h.rows||[]).filter(r => r.exercise === ex.name).map(r => ({ weight:r.weight, reps:r.reps }))
+          })))
+        : exTarget;
+      if (highFatigue && target.reps < upperHalfReps) {
+        target = { ...target, reps: upperHalfReps, e1rm: calcE1RM(target.weight, upperHalfReps) };
+      }
       const analysis = analyseSetHistory(setHist);
       setTargets.push(target);
       renderedTargets[i][si] = { weight: target.weight, reps: target.reps };
@@ -632,6 +740,8 @@ async function renderExercises() {
         <span class="set-count-label">${ex.sets} sets</span>
         <button class="btn-set-add" data-idx="${i}">+</button>
       </div>
+      ${exTarget && exTarget.backoff ? `<div class="ex-alert backoff">⚠ Set failed (0 reps) last session — suggested back-off: ${exTarget.backoff.weight}lb × ${exTarget.backoff.reps} reps next time</div>` : ""}
+      ${highFatigue ? `<div class="ex-alert fatigue">⚡ High ${exGroup.toLowerCase()} fatigue — targeting higher reps</div>` : ""}
       <div class="sets-container">${setsHTML}</div>
       <div class="notes-row">
         <div class="notes-label">Notes</div>
@@ -655,13 +765,12 @@ function appendAddExerciseBtn(container){
 }
 function addExerciseToActiveDay(){
   openRepoModal(chosen=>{
-    if(!exercises[activeDay]) exercises[activeDay]=[];
-    exercises[activeDay].push({
+    activeExArray().push({
       name:chosen.name, sets:3, reps:`${chosen.repMin}–${chosen.repMax}`,
       repMin:chosen.repMin, repMax:chosen.repMax,
       weight:chosen.weight||null, unilateral:!!chosen.unilateral
     });
-    lsSet("il:exercises",exercises);
+    persistExercises();
     renderExercises();
     toast(chosen.name+" added");
   });
@@ -669,7 +778,7 @@ function addExerciseToActiveDay(){
 
 function checkFirstSetStruggle(exIdx, setIdx) {
   if (setIdx !== 0) return;
-  const ex = (exercises[activeDay]||[])[exIdx];
+  const ex = (activeExArray()||[])[exIdx];
   if (!ex || ex.unilateral) return;
   const st = liveLog[exIdx]?.sets?.[0];
   const card = document.querySelector(`.exercise-card[data-idx="${exIdx}"]`);
@@ -714,9 +823,9 @@ function checkFirstSetStruggle(exIdx, setIdx) {
 
     // Auto-add a set if repMax <= 10 (compound) and not already added
     if (ex.repMax <= 10 && ex.sets < 6) {
-      exercises[activeDay][exIdx].sets++;
-      lsSet("il:exercises", exercises);
-      const si = exercises[activeDay][exIdx].sets - 1;
+      activeExArray()[exIdx].sets++;
+      persistExercises();
+      const si = activeExArray()[exIdx].sets - 1;
       if (!liveLog[exIdx]) liveLog[exIdx] = { sets:[] };
       liveLog[exIdx].sets[si] = { weight: String(suggestedWeight), reps:"" };
       renderExercises();
@@ -813,16 +922,16 @@ function bindExerciseInputs(container, curEx) {
   container.querySelectorAll(".btn-set-add").forEach(btn => {
     btn.addEventListener("click", e => {
       const i=parseInt(e.target.dataset.idx);
-      exercises[activeDay][i].sets++;
-      lsSet("il:exercises",exercises); renderExercises();
+      activeExArray()[i].sets++;
+      persistExercises(); renderExercises();
     });
   });
   container.querySelectorAll(".btn-set-rm").forEach(btn => {
     btn.addEventListener("click", e => {
       const i=parseInt(e.target.dataset.idx);
-      if (exercises[activeDay][i].sets<=1) return;
-      exercises[activeDay][i].sets--;
-      lsSet("il:exercises",exercises); renderExercises();
+      if (activeExArray()[i].sets<=1) return;
+      activeExArray()[i].sets--;
+      persistExercises(); renderExercises();
     });
   });
 
@@ -830,17 +939,17 @@ function bindExerciseInputs(container, curEx) {
   container.querySelectorAll(".btn-up").forEach(btn => {
     btn.addEventListener("click", e => {
       const i=parseInt(e.target.dataset.idx); if(i===0)return;
-      const arr=exercises[activeDay]; [arr[i-1],arr[i]]=[arr[i],arr[i-1]];
+      const arr=activeExArray(); [arr[i-1],arr[i]]=[arr[i],arr[i-1]];
       const ll=liveLog[i],lp=liveLog[i-1]; liveLog[i-1]=ll; liveLog[i]=lp;
-      lsSet("il:exercises",exercises); renderExercises();
+      persistExercises(); renderExercises();
     });
   });
   container.querySelectorAll(".btn-dn").forEach(btn => {
     btn.addEventListener("click", e => {
-      const i=parseInt(e.target.dataset.idx); const arr=exercises[activeDay];
+      const i=parseInt(e.target.dataset.idx); const arr=activeExArray();
       if(i>=arr.length-1)return; [arr[i+1],arr[i]]=[arr[i],arr[i+1]];
       const ll=liveLog[i],lp=liveLog[i+1]; liveLog[i+1]=ll; liveLog[i]=lp;
-      lsSet("il:exercises",exercises); renderExercises();
+      persistExercises(); renderExercises();
     });
   });
 
@@ -849,17 +958,19 @@ function bindExerciseInputs(container, curEx) {
   container.querySelectorAll(".btn-del").forEach(btn => {
     btn.addEventListener("click", e => {
       const i=parseInt(e.target.dataset.idx);
-      exercises[activeDay]=exercises[activeDay].filter((_,j)=>j!==i);
+      const filtered = activeExArray().filter((_,j)=>j!==i);
+      if (overrideMode) overrideExercises = filtered; else exercises[activeDay] = filtered;
       delete liveLog[i]; delete liveNote[i];
-      lsSet("il:exercises",exercises); renderExercises();
+      persistExercises(); renderExercises();
     });
   });
 }
 
 // ── Last session ──────────────────────────────────────────────────────────────
 function renderLastSession() {
+  const overrideLabel = `${activeDay} (Override)`;
   const prev = Object.values(sessions)
-    .filter(s=>s.day===activeDay&&s.date!==sessDate)
+    .filter(s=>(s.day===activeDay||s.day===overrideLabel)&&s.date!==sessDate)
     .sort((a,b)=>b.date.localeCompare(a.date))[0];
   const box=document.getElementById("last-session-box"), none=document.getElementById("no-last-session");
   if (prev) {
@@ -883,17 +994,31 @@ function renderDayButtons() {
     const btn=document.createElement("button");
     const isFree = d===FREEBALL_DAY;
     btn.className="day-btn"+(d===activeDay?" active":"")+(isFree?" freeball":"");
-    btn.textContent= isFree ? "＋ Freeball" : d.split("—")[1]?.trim();
-    btn.addEventListener("click",()=>{ activeDay=d; liveLog={}; liveNote={}; document.getElementById("workout-alert").classList.add("hidden"); renderDayButtons(); renderExercises(); renderLastSession(); });
+    btn.textContent= isFree ? "＋ Freeball" : (d.split("—")[1]?.trim() || d);
+    btn.addEventListener("click",()=>{
+      activeDay=d; liveLog={}; liveNote={};
+      overrideMode=false; overrideExercises=null;
+      const toggle=document.getElementById("override-toggle"); if(toggle) toggle.checked=false;
+      document.querySelector(".override-toggle")?.classList.remove("active");
+      document.getElementById("override-hint")?.classList.add("hidden");
+      document.getElementById("workout-alert").classList.add("hidden");
+      renderDayButtons(); renderExercises(); renderLastSession();
+    });
     container.appendChild(btn);
   });
+  const overrideRow = document.getElementById("override-row");
+  if (overrideRow) overrideRow.classList.toggle("hidden", activeDay===FREEBALL_DAY);
 }
 
 // ── Save session ──────────────────────────────────────────────────────────────
 async function saveSession() {
-  const curEx=exercises[activeDay]||[];
+  const curEx=activeExArray()||[];
   const cleanSessDate=sessDate.slice(0,10);
-  const sessionKey=`${cleanSessDate}_${activeDay}`;
+  // Override sessions are tagged in the Day column so they're distinguishable in
+  // the sheet/calendar, but exercise history is still tracked by exercise name —
+  // loadDayHistory() matches both the plain and "(Override)" day label.
+  const dayLabel = overrideMode ? `${activeDay} (Override)` : activeDay;
+  const sessionKey=`${cleanSessDate}_${dayLabel}`;
   const rows=[]; let hasData=false;
 
   curEx.forEach((ex,i)=>{
@@ -903,11 +1028,11 @@ async function saveSession() {
       if (ex.unilateral) {
         if (!st.weightL&&!st.weightR&&!st.repsL&&!st.repsR) return;
         hasData=true;
-        rows.push([cleanSessDate,activeDay,ex.name,si+1,`L:${st.weightL||"0"}/R:${st.weightR||"0"}`,`L:${st.repsL||"0"}/R:${st.repsR||"0"}`,liveNote[i]||"",sessionKey,st.rpe||""]);
+        rows.push([cleanSessDate,dayLabel,ex.name,si+1,`L:${st.weightL||"0"}/R:${st.weightR||"0"}`,`L:${st.repsL||"0"}/R:${st.repsR||"0"}`,liveNote[i]||"",sessionKey,st.rpe||""]);
       } else {
         if (!st.weight&&!st.reps) return;
         hasData=true;
-        rows.push([cleanSessDate,activeDay,ex.name,si+1,st.weight||"",st.reps||"",liveNote[i]||"",sessionKey,st.rpe||""]);
+        rows.push([cleanSessDate,dayLabel,ex.name,si+1,st.weight||"",st.reps||"",liveNote[i]||"",sessionKey,st.rpe||""]);
       }
     });
   });
@@ -921,29 +1046,36 @@ async function saveSession() {
     await sheetsCall({ action:"clear", sessionKey });
     await sheetsCall({ action:"write", rows:JSON.stringify(rows) });
 
-    // Per-set progression: track changes
+    // Progression: compare the double-progression target computed from history
+    // before vs. after this session, and feed the result back into the exercise
+    // by NAME in the permanent program — even when logged via an override.
+    const priorHistory = dayHistory[activeDay] || [];
     const changes=[];
     curEx.forEach((ex,i)=>{
-      if (!ex.weight||ex.unilateral) return;
+      if (ex.unilateral) return;
       const sets=liveLog[i]?.sets||[];
-      const bump=LOWER_DAYS.includes(activeDay)?10:5;
-      sets.forEach((st,si)=>{
-        if (!st?.weight||!st?.reps) return;
-        const history=getSetHistory(dayHistory[activeDay]||[], ex.name, si);
-        const prevE1RM = history.length ? calcE1RM(parseFloat(history[0].weight||0), parseFloat(history[0].reps||0)) : 0;
-        const newE1RM  = calcE1RM(parseFloat(st.weight), parseFloat(st.reps));
-        if (newE1RM > prevE1RM && prevE1RM > 0) {
-          changes.push({ name:`${ex.name} S${si+1}`, from:prevE1RM, to:newE1RM, dir:"up", metric:"e1RM" });
-        }
-        // Update suggested weight if set hit top of range
-        if (parseInt(st.reps)>=ex.repMax) {
-          exercises[activeDay][i].weight = (parseFloat(st.weight)||ex.weight) + bump;
-        }
-      });
+      const rowsForEx = sets
+        .map((st,si)=> (st && st.weight && st.reps) ? { exercise:ex.name, set:si+1, weight:st.weight, reps:st.reps } : null)
+        .filter(Boolean);
+      if (!rowsForEx.length) return;
+
+      const beforeTarget = computeTarget({ ...ex, _day:activeDay }, priorHistory);
+      const afterHistory = [{ date:cleanSessDate, rows:rowsForEx }, ...priorHistory];
+      const afterTarget  = computeTarget({ ...ex, _day:activeDay }, afterHistory);
+
+      if (afterTarget.e1rm !== beforeTarget.e1rm) {
+        changes.push({ name:ex.name, from:beforeTarget.e1rm, to:afterTarget.e1rm, dir: afterTarget.e1rm > beforeTarget.e1rm ? "up" : "dn", metric:"e1RM" });
+      }
+
+      const permanentList = exercises[activeDay];
+      if (permanentList) {
+        const permIdx = permanentList.findIndex(e => e.name === ex.name);
+        if (permIdx !== -1) permanentList[permIdx].weight = afterTarget.weight;
+      }
     });
 
     if (changes.length) {
-      progHist.unshift({ date:cleanSessDate, day:activeDay, changes });
+      progHist.unshift({ date:cleanSessDate, day:dayLabel, changes });
       lsSet("il:progHist",progHist);
     }
     // Freeball is a one-off: clear its exercises after saving so it starts empty next time.
@@ -963,8 +1095,33 @@ async function saveSession() {
     setSyncStatus("synced");
     liveLog={}; liveNote={};
     document.getElementById("workout-alert").classList.add("hidden");
-    renderExercises(); renderLastSession();
-    toast(`Saved${changes.length?" — "+changes.filter(c=>c.dir==="up").length+" set(s) progressed":""}`);
+
+    // Override session: offer to promote it to a permanent day before resetting.
+    let extraMsg = "";
+    if (overrideMode) {
+      const savedOverrideEx = overrideExercises;
+      overrideMode=false; overrideExercises=null;
+      const toggle=document.getElementById("override-toggle"); if(toggle) toggle.checked=false;
+      document.querySelector(".override-toggle")?.classList.remove("active");
+      document.getElementById("override-hint")?.classList.add("hidden");
+      if (confirm("Save this as a new permanent training day?")) {
+        let name = (prompt('Name for this new day (e.g. "Day 6 — Arms"):', "") || "").trim();
+        if (name) {
+          if (exercises[name] || DAYS.includes(name) || customDays.includes(name)) {
+            extraMsg = " — a day with that name already exists";
+          } else {
+            exercises[name] = JSON.parse(JSON.stringify(savedOverrideEx));
+            customDays.push(name);
+            lsSet("il:customDays", customDays);
+            lsSet("il:exercises", exercises);
+            extraMsg = ` — "${name}" added as a permanent day`;
+          }
+        }
+      }
+    }
+
+    renderDayButtons(); renderExercises(); renderLastSession();
+    toast(`Saved${changes.length?" — "+changes.filter(c=>c.dir==="up").length+" set(s) progressed":""}${extraMsg}`);
   } catch(e) {
     setSyncStatus("error",e.message);
     toast("Save failed: "+e.message);
@@ -1029,10 +1186,9 @@ function renderLibList(){
     const item=document.createElement("div"); item.className="repo-item";
     item.innerHTML=`<div><div class="repo-item-name">${ex.name}${ex.unilateral?'<span class="repo-item-badge">UNI</span>':""}</div><div class="repo-item-meta">${ex.group} · ${ex.repMin}–${ex.repMax} reps${ex.weight?" · "+ex.weight+"lb":" · BW"}</div></div><div class="repo-item-add" title="Add to ${activeDay===FREEBALL_DAY?'Freeball':'current'} session">+</div>`;
     item.addEventListener("click",()=>{
-      if(!exercises[activeDay]) exercises[activeDay]=[];
-      exercises[activeDay].push({ name:ex.name, sets:3, reps:`${ex.repMin}–${ex.repMax}`, repMin:ex.repMin, repMax:ex.repMax, weight:ex.weight||null, unilateral:!!ex.unilateral });
-      lsSet("il:exercises",exercises);
-      toast(`${ex.name} added to ${activeDay===FREEBALL_DAY?"Freeball":activeDay.split("—")[1]?.trim()||activeDay}`);
+      activeExArray().push({ name:ex.name, sets:3, reps:`${ex.repMin}–${ex.repMax}`, repMin:ex.repMin, repMax:ex.repMax, weight:ex.weight||null, unilateral:!!ex.unilateral });
+      persistExercises();
+      toast(`${ex.name} added to ${activeDay===FREEBALL_DAY?"Freeball":activeDay.split("—")[1]?.trim()||activeDay}${overrideMode?" (override)":""}`);
     });
     list.appendChild(item);
   });
@@ -1041,7 +1197,7 @@ function renderLibList(){
 // ── Swap Modal ────────────────────────────────────────────────────────────────
 function openSwapModal(idx) {
   swapIdx=idx;
-  const ex=exercises[activeDay][idx];
+  const ex=activeExArray()[idx];
   document.getElementById("swap-replacing").textContent="Replacing: "+ex.name;
   document.getElementById("swap-manual-form").classList.add("hidden");
   document.getElementById("swap-modal").classList.remove("hidden");
@@ -1051,9 +1207,9 @@ function openSwapModal(idx) {
     document.getElementById("swap-modal").classList.add("hidden");
     openRepoModal(chosen=>{
       const est = estimateSwapWeight(ex.name, chosen.name, srcE1RM, chosen.repMin, chosen.repMax);
-      const newWeight = chosen.weight || (est ? est.weight : exercises[activeDay][swapIdx].weight);
-      exercises[activeDay][swapIdx]={...exercises[activeDay][swapIdx],name:chosen.name,weight:newWeight,repMin:chosen.repMin,repMax:chosen.repMax,reps:`${chosen.repMin}–${chosen.repMax}`,unilateral:chosen.unilateral};
-      delete liveLog[swapIdx]; lsSet("il:exercises",exercises); renderExercises();
+      const newWeight = chosen.weight || (est ? est.weight : activeExArray()[swapIdx].weight);
+      activeExArray()[swapIdx]={...activeExArray()[swapIdx],name:chosen.name,weight:newWeight,repMin:chosen.repMin,repMax:chosen.repMax,reps:`${chosen.repMin}–${chosen.repMax}`,unilateral:chosen.unilateral};
+      delete liveLog[swapIdx]; persistExercises(); renderExercises();
       toast(est && !chosen.weight ? `Swapped — est. ${est.weight}lb from your ${ex.name} e1RM` : "Exercise swapped");
     });
   };
@@ -1079,8 +1235,8 @@ function openSwapModal(idx) {
   document.getElementById("swap-confirm").onclick=()=>{
     const name=document.getElementById("swap-name").value.trim(); if(!name)return;
     const wt=parseFloat(document.getElementById("swap-weight").value);
-    exercises[activeDay][swapIdx]={...exercises[activeDay][swapIdx],name,weight:isNaN(wt)?exercises[activeDay][swapIdx].weight:wt};
-    delete liveLog[swapIdx]; lsSet("il:exercises",exercises);
+    activeExArray()[swapIdx]={...activeExArray()[swapIdx],name,weight:isNaN(wt)?activeExArray()[swapIdx].weight:wt};
+    delete liveLog[swapIdx]; persistExercises();
     document.getElementById("swap-modal").classList.add("hidden");
     renderExercises(); toast("Exercise swapped");
   };
@@ -1136,7 +1292,7 @@ function renderCalDetail() {
 // ── Progress Tab ──────────────────────────────────────────────────────────────
 function renderProgress() {
   // Exercise picker for e1RM chart
-  const allExNames=[...new Set(DAYS.flatMap(d=>(exercises[d]||[]).map(e=>e.name)))];
+  const allExNames=[...new Set(allProgramDays().flatMap(d=>(exercises[d]||[]).map(e=>e.name)))];
   if(!selectedE1RMEx&&allExNames.length) selectedE1RMEx=allExNames[0];
 
   const picker=document.getElementById("e1rm-exercise-picker"); picker.innerHTML="";
@@ -1179,7 +1335,7 @@ function renderProgress() {
       </div>`).join("");
 
   // Current weights
-  document.getElementById("current-weights").innerHTML=DAYS.map(dk=>`
+  document.getElementById("current-weights").innerHTML=allProgramDays().map(dk=>`
     <div class="weights-day">
       <div class="weights-day-title">${dk}</div>
       ${(exercises[dk]||[]).map(ex=>`<div class="weights-row"><span>${ex.name}</span><span>${ex.weight?ex.weight+"lb":"BW"}</span></div>`).join("")}
@@ -1408,6 +1564,13 @@ async function init() {
 
   document.getElementById("save-btn").addEventListener("click",saveSession);
   document.getElementById("bw-save").addEventListener("click",saveBw);
+  document.getElementById("override-toggle").addEventListener("change",e=>{
+    overrideMode = e.target.checked;
+    overrideExercises = overrideMode ? JSON.parse(JSON.stringify(exercises[activeDay]||[])) : null;
+    document.querySelector(".override-toggle").classList.toggle("active", overrideMode);
+    document.getElementById("override-hint").classList.toggle("hidden", !overrideMode);
+    renderExercises();
+  });
   document.getElementById("repo-close").addEventListener("click",()=>document.getElementById("repo-modal").classList.add("hidden"));
   document.getElementById("repo-search").addEventListener("input",e=>{repoSearch=e.target.value;renderRepoList();});
 

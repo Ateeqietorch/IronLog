@@ -70,6 +70,11 @@ input::placeholder { color:var(--text4); }
 .day-btn.active { color:var(--gold); border-color:var(--gold); background:#1a1510; }
 .day-btn.freeball { color:var(--green); border-color:#2a3a2a; border-style:dashed; }
 .day-btn.freeball.active { color:var(--green); border-color:var(--green); background:#0f1a0f; border-style:solid; }
+.override-row { display:flex; flex-direction:column; gap:4px; margin-bottom:12px; }
+.override-toggle { display:flex; align-items:center; gap:7px; font-size:10px; color:var(--text3); letter-spacing:.08em; text-transform:uppercase; cursor:pointer; }
+.override-toggle input { accent-color:var(--gold); width:14px; height:14px; cursor:pointer; }
+.override-toggle.active span { color:var(--gold); }
+.override-hint { font-size:9px; color:#7a6a3a; line-height:1.5; }
 .btn-add-exercise { width:100%; background:none; border:1px dashed #2a3a2a; color:var(--green); cursor:pointer; font-family:var(--font-mono); font-size:11px; letter-spacing:.08em; text-transform:uppercase; padding:11px; border-radius:3px; margin-top:10px; transition:all .2s; }
 .btn-add-exercise:hover { border-color:var(--green); background:#0f1a0f; }
 
@@ -123,6 +128,8 @@ input::placeholder { color:var(--text4); }
 .ex-alert.stagnant { color:var(--yellow); background:#1a1a08; border:1px solid #3a3a18; }
 .ex-alert.declining { color:var(--red); background:#1a0808; border:1px solid #3a1818; }
 .ex-alert.pr { color:var(--green); background:#081a08; border:1px solid #183a18; }
+.ex-alert.backoff { color:var(--yellow); background:#1a1608; border:1px solid #3a3018; }
+.ex-alert.fatigue { color:var(--yellow); background:#1a1608; border:1px solid #3a3018; }
 
 /* BADGE */
 .badge-uni { font-size:8px; color:var(--gold); border:1px solid var(--gold); border-radius:2px; padding:1px 5px; letter-spacing:.06em; margin-left:5px; vertical-align:middle; }
