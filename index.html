@@ -73,6 +73,10 @@
       <div class="save-row">
         <button id="save-btn" class="btn-primary">Save Session →</button>
       </div>
+      <div id="session-review-box" class="session-review hidden">
+        <div class="session-review-title">AI SESSION REVIEW</div>
+        <div id="session-review-body" class="session-review-body"></div>
+      </div>
     </div>
 
     <!-- CALENDAR TAB -->
@@ -185,6 +189,34 @@
       <div style="margin-top:10px">
         <button id="swap-cancel-main" class="btn-ghost" style="width:100%">Cancel</button>
       </div>
+    </div>
+  </div>
+
+  <!-- RECONSIDER MODAL -->
+  <div id="reconsider-modal" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-title">RECONSIDER EXERCISE</div>
+      <div id="reconsider-exname" class="modal-sub"></div>
+      <div id="reconsider-form">
+        <div class="field-label">WHY RECONSIDER?</div>
+        <textarea id="reconsider-reason" class="reconsider-textarea" rows="3" placeholder="e.g. shoulder feels cranky today, gym doesn't have this machine, bored of it..."></textarea>
+        <div class="modal-buttons" style="margin-top:14px">
+          <button id="reconsider-submit" class="btn-primary" style="flex:1">Ask AI</button>
+          <button id="reconsider-cancel" class="btn-ghost">Cancel</button>
+        </div>
+      </div>
+      <div id="reconsider-loading" class="hidden reconsider-loading">Thinking...</div>
+      <div id="reconsider-result" class="hidden">
+        <div class="field-label">SUGGESTION</div>
+        <div id="reconsider-suggestion-name" class="reconsider-suggestion-name"></div>
+        <div id="reconsider-suggestion-meta" class="reconsider-suggestion-meta"></div>
+        <div id="reconsider-suggestion-rationale" class="reconsider-suggestion-rationale"></div>
+        <div class="modal-buttons">
+          <button id="reconsider-accept" class="btn-primary" style="flex:1">Accept</button>
+          <button id="reconsider-dismiss" class="btn-ghost">Dismiss</button>
+        </div>
+      </div>
+      <div id="reconsider-error" class="hidden reconsider-error"></div>
     </div>
   </div>
 

@@ -440,12 +440,12 @@ async function sheetsCall(params) {
 function parseSessionRows(rows) {
   const result = {};
   for (let i = 1; i < rows.length; i++) {
-    const [rawDate,day,exercise,set,weight,reps,notes,sessionKey,rpe] = rows[i];
+    const [rawDate,day,exercise,set,weight,reps,notes,sessionKey,rpe,completed] = rows[i];
     if (!sessionKey || !rawDate) continue;
     const date = cleanDate(rawDate);
     if (!result[sessionKey]) result[sessionKey] = { date, day, exercises:{} };
     if (!result[sessionKey].exercises[exercise]) result[sessionKey].exercises[exercise] = [];
-    result[sessionKey].exercises[exercise].push({ set, weight, reps, notes, rpe });
+    result[sessionKey].exercises[exercise].push({ set, weight, reps, notes, rpe, completed });
   }
   return result;
 }
@@ -453,11 +453,11 @@ function parseSessionRows(rows) {
 function parseDraftRows(rows) {
   const result = {};
   for (let i = 1; i < rows.length; i++) {
-    const [rawDate,day,exercise,set,weight,reps,notes,draftKey,rpe] = rows[i];
+    const [rawDate,day,exercise,set,weight,reps,notes,draftKey,rpe,completed] = rows[i];
     if (!draftKey || !rawDate) continue;
     const date = cleanDate(rawDate);
     if (!result[draftKey]) result[draftKey] = { date, day, sets:[] };
-    result[draftKey].sets.push({ exercise, set:parseInt(set), weight, reps, notes, rpe });
+    result[draftKey].sets.push({ exercise, set:parseInt(set), weight, reps, notes, rpe, completed });
   }
   return result;
 }
@@ -478,7 +478,7 @@ function formatSession(sess) {
 function sessionToRows(sess) {
   const rows = [];
   Object.entries(sess.exercises).forEach(([exercise, sets]) => {
-    sets.forEach(s => rows.push({ exercise, set: parseInt(s.set), weight: s.weight, reps: s.reps, rpe: s.rpe }));
+    sets.forEach(s => rows.push({ exercise, set: parseInt(s.set), weight: s.weight, reps: s.reps, rpe: s.rpe, completed: s.completed }));
   });
   return rows;
 }
@@ -553,7 +553,7 @@ async function saveDraft() {
       rows.push([sessDate,activeDay,ex.name,si+1,
         ex.unilateral ? `L:${st.weightL||""}` : (st.weight||""),
         ex.unilateral ? `L:${st.repsL||""}/R:${st.repsR||""}` : (st.reps||""),
-        liveNote[i]||"", dk, st.rpe||""
+        liveNote[i]||"", dk, st.rpe||"", st.hit?"1":"0"
       ]);
     });
   });
@@ -731,6 +731,7 @@ async function renderExercises() {
         <div class="ex-actions">
           <button class="btn-icon btn-up" data-idx="${i}">↑</button>
           <button class="btn-icon btn-dn" data-idx="${i}">↓</button>
+          <button class="btn-icon btn-reconsider" data-idx="${i}" title="Ask AI to reconsider this exercise">🤔</button>
           <button class="btn-icon btn-swap" data-idx="${i}">⇄</button>
           <button class="btn-icon btn-del" data-idx="${i}">✕</button>
         </div>
@@ -955,6 +956,7 @@ function bindExerciseInputs(container, curEx) {
 
   // Swap/delete
   container.querySelectorAll(".btn-swap").forEach(btn => btn.addEventListener("click",e=>openSwapModal(parseInt(e.target.dataset.idx))));
+  container.querySelectorAll(".btn-reconsider").forEach(btn => btn.addEventListener("click",e=>openReconsiderModal(parseInt(e.target.dataset.idx))));
   container.querySelectorAll(".btn-del").forEach(btn => {
     btn.addEventListener("click", e => {
       const i=parseInt(e.target.dataset.idx);
@@ -1002,6 +1004,7 @@ function renderDayButtons() {
       document.querySelector(".override-toggle")?.classList.remove("active");
       document.getElementById("override-hint")?.classList.add("hidden");
       document.getElementById("workout-alert").classList.add("hidden");
+      document.getElementById("session-review-box").classList.add("hidden");
       renderDayButtons(); renderExercises(); renderLastSession();
     });
     container.appendChild(btn);
@@ -1028,11 +1031,11 @@ async function saveSession() {
       if (ex.unilateral) {
         if (!st.weightL&&!st.weightR&&!st.repsL&&!st.repsR) return;
         hasData=true;
-        rows.push([cleanSessDate,dayLabel,ex.name,si+1,`L:${st.weightL||"0"}/R:${st.weightR||"0"}`,`L:${st.repsL||"0"}/R:${st.repsR||"0"}`,liveNote[i]||"",sessionKey,st.rpe||""]);
+        rows.push([cleanSessDate,dayLabel,ex.name,si+1,`L:${st.weightL||"0"}/R:${st.weightR||"0"}`,`L:${st.repsL||"0"}/R:${st.repsR||"0"}`,liveNote[i]||"",sessionKey,st.rpe||"",st.hit?"1":"0"]);
       } else {
         if (!st.weight&&!st.reps) return;
         hasData=true;
-        rows.push([cleanSessDate,dayLabel,ex.name,si+1,st.weight||"",st.reps||"",liveNote[i]||"",sessionKey,st.rpe||""]);
+        rows.push([cleanSessDate,dayLabel,ex.name,si+1,st.weight||"",st.reps||"",liveNote[i]||"",sessionKey,st.rpe||"",st.hit?"1":"0"]);
       }
     });
   });
@@ -1041,6 +1044,7 @@ async function saveSession() {
 
   const btn=document.getElementById("save-btn");
   btn.disabled=true; btn.textContent="Saving..."; setSyncStatus("saving");
+  document.getElementById("session-review-box").classList.add("hidden");
 
   try {
     await sheetsCall({ action:"clear", sessionKey });
@@ -1122,11 +1126,31 @@ async function saveSession() {
 
     renderDayButtons(); renderExercises(); renderLastSession();
     toast(`Saved${changes.length?" — "+changes.filter(c=>c.dir==="up").length+" set(s) progressed":""}${extraMsg}`);
+
+    // Fire-and-forget: doesn't block the save flow or re-enable of the button below.
+    requestSessionReview(sessionKey, dayLabel, cleanSessDate);
   } catch(e) {
     setSyncStatus("error",e.message);
     toast("Save failed: "+e.message);
   }
   btn.disabled=false; btn.textContent="Save Session →";
+}
+
+// ── AI: end-of-session review ────────────────────────────────────────────────
+async function requestSessionReview(sessionKey, day, date) {
+  const box  = document.getElementById("session-review-box");
+  const body = document.getElementById("session-review-body");
+  box.classList.remove("hidden");
+  body.classList.add("loading");
+  body.textContent = "Reviewing your session...";
+  try {
+    const d = await sheetsCall({ action:"ai_review", sessionKey, day, date });
+    body.classList.remove("loading");
+    if (d.ok && d.summary) body.textContent = d.summary;
+    else box.classList.add("hidden");
+  } catch(e) {
+    box.classList.add("hidden");
+  }
 }
 
 // ── Exercise Repository ───────────────────────────────────────────────────────
@@ -1243,6 +1267,70 @@ function openSwapModal(idx) {
 }
 document.getElementById("swap-cancel-main").addEventListener("click",()=>document.getElementById("swap-modal").classList.add("hidden"));
 document.getElementById("swap-cancel").addEventListener("click",()=>document.getElementById("swap-modal").classList.add("hidden"));
+
+// ── Reconsider Modal (AI) ────────────────────────────────────────────────────
+function openReconsiderModal(idx) {
+  const ex = activeExArray()[idx];
+  document.getElementById("reconsider-exname").textContent = "Reconsidering: " + ex.name;
+  document.getElementById("reconsider-reason").value = "";
+  document.getElementById("reconsider-form").classList.remove("hidden");
+  document.getElementById("reconsider-loading").classList.add("hidden");
+  document.getElementById("reconsider-result").classList.add("hidden");
+  document.getElementById("reconsider-error").classList.add("hidden");
+  document.getElementById("reconsider-modal").classList.remove("hidden");
+
+  document.getElementById("reconsider-submit").onclick = async () => {
+    const reason = document.getElementById("reconsider-reason").value.trim();
+    if (!reason) { toast("Say why you want to reconsider it"); return; }
+    document.getElementById("reconsider-form").classList.add("hidden");
+    document.getElementById("reconsider-error").classList.add("hidden");
+    document.getElementById("reconsider-loading").classList.remove("hidden");
+    try {
+      const d = await sheetsCall({
+        action: "ai_reconsider",
+        exercise: ex.name, day: activeDay, group: getMuscleGroup(ex.name),
+        sets: ex.sets, repMin: ex.repMin, repMax: ex.repMax, weight: ex.weight || 0,
+        reason
+      });
+      document.getElementById("reconsider-loading").classList.add("hidden");
+      if (!d.ok || !d.suggestion) throw new Error(d.msg || "No suggestion returned");
+      const s = d.suggestion;
+      document.getElementById("reconsider-suggestion-name").textContent = s.substitute_exercise;
+      document.getElementById("reconsider-suggestion-meta").textContent =
+        `${s.sets} sets × ${s.repMin}–${s.repMax} reps @ ${s.weight}lb`;
+      document.getElementById("reconsider-suggestion-rationale").textContent = s.rationale || "";
+      document.getElementById("reconsider-result").classList.remove("hidden");
+
+      document.getElementById("reconsider-accept").onclick = () => {
+        const originalName = ex.name;
+        activeExArray()[idx] = {
+          ...activeExArray()[idx],
+          name: s.substitute_exercise, sets: s.sets, repMin: s.repMin, repMax: s.repMax,
+          reps: `${s.repMin}–${s.repMax}`, weight: s.weight
+        };
+        delete liveLog[idx];
+        persistExercises();
+        sheetsCall({
+          action: "log_swap", date: sessDate, day: activeDay,
+          exerciseOriginal: originalName, exerciseSubstituted: s.substitute_exercise,
+          reason, weight: s.weight, sets: s.sets, reps: `${s.repMin}-${s.repMax}`
+        }).catch(()=>{});
+        document.getElementById("reconsider-modal").classList.add("hidden");
+        renderExercises();
+        toast(`Swapped to ${s.substitute_exercise} (AI suggestion)`);
+      };
+      document.getElementById("reconsider-dismiss").onclick = () => {
+        document.getElementById("reconsider-modal").classList.add("hidden");
+      };
+    } catch(e) {
+      document.getElementById("reconsider-loading").classList.add("hidden");
+      document.getElementById("reconsider-error").textContent = "Couldn't get a suggestion: " + e.message;
+      document.getElementById("reconsider-error").classList.remove("hidden");
+      document.getElementById("reconsider-form").classList.remove("hidden");
+    }
+  };
+}
+document.getElementById("reconsider-cancel").addEventListener("click",()=>document.getElementById("reconsider-modal").classList.add("hidden"));
 
 // ── Calendar ──────────────────────────────────────────────────────────────────
 function renderCalendar() {
