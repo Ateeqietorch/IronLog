@@ -200,6 +200,49 @@ function doGet(e) {
       return respond({ ok: true, summary });
     }
 
+    // ── AI: pre-session sanity check ───────────────────────────────────────────
+    // Before a session starts. Takes the rule-engine's auto-generated exercise
+    // list plus a free-text "how are you feeling" note, and asks Claude whether
+    // to adjust weights/sets/reps or swap any exercises for today only. Always
+    // returns the FULL exercise list back (unchanged entries included) so the
+    // client can apply it wholesale.
+    if (action === "ai_presession_check") {
+      const day      = e.parameter.day;
+      const date     = e.parameter.date;
+      const feeling  = e.parameter.feeling || "";
+      let exercises;
+      try { exercises = JSON.parse(e.parameter.exercises); } catch (err) { exercises = []; }
+      if (!exercises.length) return respond({ ok: false, msg: "no exercises to check" });
+
+      const planLines = exercises.map(ex =>
+        ex.name + " (" + (ex.group || "Other") + "): " + ex.sets + " sets x " + ex.repMin + "-" + ex.repMax +
+        " reps @ " + (ex.weight || "BW") + (ex.weight ? "lb" : "")
+      ).join("\n");
+      const priorLog = recentDayHistoryExcluding(ss, day, "", 2);
+
+      const system = "You are a hypertrophy-training assistant embedded in IronLog. Before the user starts " +
+        "today's session, decide whether their stated feeling warrants adjusting it. All weights are in pounds. " +
+        "Never suggest Barbell Back Squat or Barbell Deadlift. You may reduce weight/sets/reps on some or all " +
+        "exercises (e.g. fatigue, soreness, low sleep), substitute an exercise (e.g. to avoid a sore joint), or " +
+        "make no changes if the note doesn't warrant it — most notes should NOT change a well-designed session. " +
+        "Respond with ONLY a JSON object, no markdown fences, no other text, matching exactly: " +
+        '{"adjusted": boolean, "exercises": [{"name": string, "sets": number, "repMin": number, "repMax": number, ' +
+        '"weight": number, "substituted_from": string|null}], "note": string}. ' +
+        "The exercises array MUST contain every exercise from the planned session, in the same order, whether " +
+        "changed or not — set substituted_from to null for anything not substituted.";
+
+      const userText = "Training day: " + day + " (" + date + ")\n\nPlanned session:\n" + planLines +
+        "\n\nHow the user says they're feeling today: " + (feeling || "(nothing stated)") +
+        "\n\nRecent sessions on this day for context:\n" + (priorLog || "No prior sessions on record.");
+
+      const raw = callClaude(system, userText, 2048);
+      const parsed = parseClaudeJson(raw);
+      if (!parsed || !Array.isArray(parsed.exercises)) {
+        return respond({ ok: false, msg: "Could not parse AI response" });
+      }
+      return respond({ ok: true, adjusted: !!parsed.adjusted, exercises: parsed.exercises, note: parsed.note || "" });
+    }
+
     return respond({ ok: false, msg: "unknown action: " + action });
 
   } catch(err) {

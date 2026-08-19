@@ -1332,6 +1332,85 @@ function openReconsiderModal(idx) {
 }
 document.getElementById("reconsider-cancel").addEventListener("click",()=>document.getElementById("reconsider-modal").classList.add("hidden"));
 
+// ── Feeling Check Modal (AI pre-session sanity check) ────────────────────────
+function openFeelingModal() {
+  const curEx = activeExArray() || [];
+  if (!curEx.length) { toast("No exercises to check — add some first"); return; }
+  document.getElementById("feeling-note").value = "";
+  document.getElementById("feeling-form").classList.remove("hidden");
+  document.getElementById("feeling-loading").classList.add("hidden");
+  document.getElementById("feeling-result").classList.add("hidden");
+  document.getElementById("feeling-error").classList.add("hidden");
+  document.getElementById("feeling-modal").classList.remove("hidden");
+}
+document.getElementById("feeling-check-btn").addEventListener("click", openFeelingModal);
+document.getElementById("feeling-cancel").addEventListener("click",()=>document.getElementById("feeling-modal").classList.add("hidden"));
+document.getElementById("feeling-dismiss").addEventListener("click",()=>document.getElementById("feeling-modal").classList.add("hidden"));
+
+document.getElementById("feeling-submit").addEventListener("click", async () => {
+  const feeling = document.getElementById("feeling-note").value.trim();
+  if (!feeling) { toast("Say a bit about how you're feeling"); return; }
+  const curEx = activeExArray() || [];
+  document.getElementById("feeling-form").classList.add("hidden");
+  document.getElementById("feeling-error").classList.add("hidden");
+  document.getElementById("feeling-loading").classList.remove("hidden");
+  try {
+    const exercisesPayload = curEx.map(ex => ({
+      name: ex.name, sets: ex.sets, repMin: ex.repMin, repMax: ex.repMax,
+      weight: ex.weight || 0, group: getMuscleGroup(ex.name)
+    }));
+    const d = await sheetsCall({
+      action: "ai_presession_check", day: activeDay, date: sessDate,
+      feeling, exercises: JSON.stringify(exercisesPayload)
+    });
+    document.getElementById("feeling-loading").classList.add("hidden");
+    if (!d.ok || !Array.isArray(d.exercises)) throw new Error(d.msg || "No response");
+
+    document.getElementById("feeling-note-text").textContent = d.note || (d.adjusted ? "Session adjusted." : "No changes needed.");
+    const changesBox = document.getElementById("feeling-changes");
+    const acceptBtn  = document.getElementById("feeling-accept");
+
+    if (d.adjusted) {
+      changesBox.innerHTML = d.exercises.map(ex => `
+        <div class="feeling-change-row">
+          <span class="fc-name">${ex.name}</span> — ${ex.sets} sets × ${ex.repMin}–${ex.repMax} @ ${ex.weight}lb
+          ${ex.substituted_from ? `<span class="fc-sub">swapped from ${ex.substituted_from}</span>` : ""}
+        </div>`).join("");
+      acceptBtn.classList.remove("hidden");
+      acceptBtn.onclick = () => {
+        // A "today only" adjustment — route it through override mode so the
+        // permanent program is never touched.
+        if (!overrideMode) {
+          overrideMode = true;
+          const toggle = document.getElementById("override-toggle"); if (toggle) toggle.checked = true;
+          document.querySelector(".override-toggle")?.classList.add("active");
+          document.getElementById("override-hint")?.classList.remove("hidden");
+        }
+        overrideExercises = d.exercises.map(ex => {
+          const original = curEx.find(o => o.name === (ex.substituted_from || ex.name)) || {};
+          return {
+            ...original, name: ex.name, sets: ex.sets, repMin: ex.repMin, repMax: ex.repMax,
+            reps: `${ex.repMin}–${ex.repMax}`, weight: ex.weight, unilateral: original.unilateral || false
+          };
+        });
+        liveLog = {}; liveNote = {};
+        document.getElementById("feeling-modal").classList.add("hidden");
+        renderDayButtons(); renderExercises(); renderLastSession();
+        toast("Session adjusted for today");
+      };
+    } else {
+      changesBox.innerHTML = "";
+      acceptBtn.classList.add("hidden");
+    }
+    document.getElementById("feeling-result").classList.remove("hidden");
+  } catch(e) {
+    document.getElementById("feeling-loading").classList.add("hidden");
+    document.getElementById("feeling-error").textContent = "Couldn't check the session: " + e.message;
+    document.getElementById("feeling-error").classList.remove("hidden");
+    document.getElementById("feeling-form").classList.remove("hidden");
+  }
+});
+
 // ── Calendar ──────────────────────────────────────────────────────────────────
 function renderCalendar() {
   const tk=todayStr();

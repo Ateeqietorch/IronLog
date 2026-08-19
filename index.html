@@ -61,6 +61,7 @@
           </label>
           <div id="override-hint" class="override-hint hidden">Changes apply to today's session only — the permanent program is untouched.</div>
         </div>
+        <button id="feeling-check-btn" class="btn-feeling-check">💬 How are you feeling today?</button>
         <div id="last-session-box" class="last-session hidden">
           <div id="last-session-title" class="last-session-title"></div>
           <pre id="last-session-body" class="last-session-body"></pre>
@@ -217,6 +218,31 @@
         </div>
       </div>
       <div id="reconsider-error" class="hidden reconsider-error"></div>
+    </div>
+  </div>
+
+  <!-- FEELING CHECK MODAL (pre-session sanity check) -->
+  <div id="feeling-modal" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-title">HOW ARE YOU FEELING?</div>
+      <div class="modal-sub">Today's auto-generated session can be adjusted before you start, if it's warranted.</div>
+      <div id="feeling-form">
+        <textarea id="feeling-note" class="reconsider-textarea" rows="3" placeholder="e.g. slept badly, low energy, shoulder's been cranky all week, feeling great actually..."></textarea>
+        <div class="modal-buttons" style="margin-top:14px">
+          <button id="feeling-submit" class="btn-primary" style="flex:1">Ask AI</button>
+          <button id="feeling-cancel" class="btn-ghost">Cancel</button>
+        </div>
+      </div>
+      <div id="feeling-loading" class="hidden reconsider-loading">Reviewing today's session...</div>
+      <div id="feeling-result" class="hidden">
+        <div id="feeling-note-text" class="reconsider-suggestion-rationale"></div>
+        <div id="feeling-changes" class="feeling-changes"></div>
+        <div class="modal-buttons">
+          <button id="feeling-accept" class="btn-primary hidden" style="flex:1">Apply for Today</button>
+          <button id="feeling-dismiss" class="btn-ghost" style="flex:1">Close</button>
+        </div>
+      </div>
+      <div id="feeling-error" class="hidden reconsider-error"></div>
     </div>
   </div>
 
