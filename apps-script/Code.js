@@ -143,7 +143,7 @@ function doGet(e) {
       const raw = callClaude(system, userText, 1536);
       const suggestion = parseClaudeJson(raw);
       if (!suggestion || !suggestion.substitute_exercise) {
-        return respond({ ok: false, msg: "Could not parse AI suggestion" });
+        return respond({ ok: false, msg: "Could not parse AI suggestion. Raw: " + String(raw).slice(0, 400) });
       }
       return respond({ ok: true, suggestion });
     }
@@ -225,6 +225,7 @@ function doGet(e) {
         "Never suggest Barbell Back Squat or Barbell Deadlift. You may reduce weight/sets/reps on some or all " +
         "exercises (e.g. fatigue, soreness, low sleep), substitute an exercise (e.g. to avoid a sore joint), or " +
         "make no changes if the note doesn't warrant it — most notes should NOT change a well-designed session. " +
+        "Keep \"note\" to ONE short sentence — do not explain your reasoning per exercise, just state the object. " +
         "Respond with ONLY a single valid JSON object and NOTHING else — no preamble, no explanation, no markdown fences, no closing remarks. Your entire response must start with { and end with }, matching exactly this shape: " +
         '{"adjusted": boolean, "exercises": [{"name": string, "sets": number, "repMin": number, "repMax": number, ' +
         '"weight": number, "substituted_from": string|null}], "note": string}. ' +
@@ -235,10 +236,10 @@ function doGet(e) {
         "\n\nHow the user says they're feeling today: " + (feeling || "(nothing stated)") +
         "\n\nRecent sessions on this day for context:\n" + (priorLog || "No prior sessions on record.");
 
-      const raw = callClaude(system, userText, 2048);
+      const raw = callClaude(system, userText, 4096);
       const parsed = parseClaudeJson(raw);
       if (!parsed || !Array.isArray(parsed.exercises)) {
-        return respond({ ok: false, msg: "Could not parse AI response" });
+        return respond({ ok: false, msg: "Could not parse AI response. Raw: " + String(raw).slice(0, 500) });
       }
       return respond({ ok: true, adjusted: !!parsed.adjusted, exercises: parsed.exercises, note: parsed.note || "" });
     }
