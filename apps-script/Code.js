@@ -363,11 +363,12 @@ function recentExerciseHistory(ss, exerciseName, limit) {
 
 // Last N sessions for a training day, excluding one sessionKey (the one just saved).
 function recentDayHistoryExcluding(ss, day, excludeKey, limit) {
+  const overrideLabel = day + " (Override)";
   const allRows = ss.getSheetByName(SESSIONS_SHEET).getDataRange().getValues();
   const bySession = {};
   for (let i = 1; i < allRows.length; i++) {
     const [rawDate, rowDay, exercise, set, weight, reps, notes, sessionKey, rpe, completed] = allRows[i];
-    if (rowDay !== day || String(sessionKey) === String(excludeKey)) continue;
+    if ((rowDay !== day && rowDay !== overrideLabel) || String(sessionKey) === String(excludeKey)) continue;
     if (!bySession[sessionKey]) bySession[sessionKey] = { date: cleanDate(rawDate), rows: [] };
     bySession[sessionKey].rows.push({ exercise, set, weight, reps, rpe, completed });
   }
