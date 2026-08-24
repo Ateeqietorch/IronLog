@@ -132,7 +132,7 @@ function doGet(e) {
         "user wants reconsidered and their stated reason, propose ONE substitute exercise (can be a different " +
         "movement pattern, or the same exercise with adjusted parameters if that better fits the reason) with " +
         "adjusted sets/rep range/working weight, and a brief rationale (1-2 sentences). " +
-        "Respond with ONLY a JSON object, no markdown fences, no other text, matching exactly: " +
+        "Respond with ONLY a single valid JSON object and NOTHING else — no preamble, no explanation, no markdown fences, no closing remarks. Your entire response must start with { and end with }, matching exactly this shape: " +
         '{"substitute_exercise": string, "sets": number, "repMin": number, "repMax": number, "weight": number, "rationale": string}';
 
       const userText = "Exercise to reconsider: " + exercise + " (" + group + ", training day: " + day + ")\n" +
@@ -140,7 +140,7 @@ function doGet(e) {
         "User's stated reason: " + reason + "\n\n" +
         "Recent history for this exercise (most recent first):\n" + (history || "No prior logged sessions.");
 
-      const raw = callClaude(system, userText, 1024);
+      const raw = callClaude(system, userText, 1536);
       const suggestion = parseClaudeJson(raw);
       if (!suggestion || !suggestion.substitute_exercise) {
         return respond({ ok: false, msg: "Could not parse AI suggestion" });
@@ -183,13 +183,13 @@ function doGet(e) {
         "Write a short, honest, encouraging coaching summary (3-5 sentences): call out notable trends (volume " +
         "trending low/high on a muscle group, RPE drift upward, a pattern of missed/incomplete sets), and if " +
         "relevant, one concrete suggestion for the next session on this day. Never suggest Barbell Back Squat or " +
-        "Barbell Deadlift. Respond with ONLY a JSON object, no markdown fences, no other text, matching exactly: " +
+        "Barbell Deadlift. Respond with ONLY a single valid JSON object and NOTHING else — no preamble, no explanation, no markdown fences, no closing remarks. Your entire response must start with { and end with }, matching exactly this shape: " +
         '{"summary": string}';
 
       const userText = "Training day: " + day + " (" + date + ")\n\nJust-logged session:\n" + sessionLog +
         "\n\nRecent sessions on this same day for comparison:\n" + (priorLog || "No prior sessions on record.");
 
-      const raw = callClaude(system, userText, 1024);
+      const raw = callClaude(system, userText, 1536);
       const parsed = parseClaudeJson(raw);
       const summary = parsed && parsed.summary ? parsed.summary : raw;
 
@@ -225,7 +225,7 @@ function doGet(e) {
         "Never suggest Barbell Back Squat or Barbell Deadlift. You may reduce weight/sets/reps on some or all " +
         "exercises (e.g. fatigue, soreness, low sleep), substitute an exercise (e.g. to avoid a sore joint), or " +
         "make no changes if the note doesn't warrant it — most notes should NOT change a well-designed session. " +
-        "Respond with ONLY a JSON object, no markdown fences, no other text, matching exactly: " +
+        "Respond with ONLY a single valid JSON object and NOTHING else — no preamble, no explanation, no markdown fences, no closing remarks. Your entire response must start with { and end with }, matching exactly this shape: " +
         '{"adjusted": boolean, "exercises": [{"name": string, "sets": number, "repMin": number, "repMax": number, ' +
         '"weight": number, "substituted_from": string|null}], "note": string}. ' +
         "The exercises array MUST contain every exercise from the planned session, in the same order, whether " +
@@ -319,10 +319,25 @@ function callClaude(system, userText, maxTokens) {
 // in case it wraps the object anyway.
 function parseClaudeJson(raw) {
   if (!raw) return null;
-  let text = raw.trim();
+  const text = raw.trim();
+
+  // 1) Straight parse.
+  try { return JSON.parse(text); } catch (err) {}
+
+  // 2) Markdown-fenced JSON, in case Claude wrapped it despite instructions.
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-  if (fenced) text = fenced[1];
-  try { return JSON.parse(text); } catch (err) { return null; }
+  if (fenced) {
+    try { return JSON.parse(fenced[1]); } catch (err) {}
+  }
+
+  // 3) Prose before/after the object — grab the outermost {...} substring.
+  const start = text.indexOf("{");
+  const end   = text.lastIndexOf("}");
+  if (start !== -1 && end > start) {
+    try { return JSON.parse(text.slice(start, end + 1)); } catch (err) {}
+  }
+
+  return null;
 }
 
 // Last N sessions (any day) that logged working sets for a given exercise name.
