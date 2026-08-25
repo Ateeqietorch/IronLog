@@ -583,6 +583,28 @@ async function checkForDraft() {
   } catch {}
 }
 
+// Loads a draft's sets into liveLog. Any exercise name not found in the
+// currently active list (permanent or override) gets ADDED rather than
+// silently dropped, so a mismatch — override state that didn't survive, an
+// exercise since removed from the program, whatever — never loses data.
+function applyDraftToLiveLog(draft) {
+  const curArr = activeExArray();
+  liveLog = {}; liveNote = {};
+  draft.sets.forEach(s => {
+    let exIdx = curArr.findIndex(e => e.name === s.exercise);
+    if (exIdx === -1) {
+      curArr.push({ name:s.exercise, sets:1, reps:"", repMin:1, repMax:20, weight:null, unilateral:false });
+      exIdx = curArr.length - 1;
+    }
+    const si = s.set - 1;
+    if (curArr[exIdx].sets < si + 1) curArr[exIdx].sets = si + 1;
+    if (!liveLog[exIdx]) liveLog[exIdx] = { sets:[] };
+    liveLog[exIdx].sets[si] = { weight:s.weight, reps:s.reps, rpe:s.rpe||"" };
+    if (s.notes) liveNote[exIdx] = s.notes;
+  });
+  persistExercises();
+}
+
 function showDraftBanner(draft, key) {
   const banner = document.getElementById("draft-banner");
   document.getElementById("draft-banner-text").textContent =
@@ -591,17 +613,7 @@ function showDraftBanner(draft, key) {
   document.getElementById("draft-continue").onclick = () => {
     activeDay = draft.day; sessDate = draft.date;
     document.getElementById("session-date").value = draft.date;
-    liveLog = {}; liveNote = {};
-    // activeExArray() — not the raw permanent list — so a draft logged while
-    // "Override Today" was on (e.g. after an AI swap) still resolves correctly
-    // once init() has restored that override state from localStorage.
-    draft.sets.forEach(s => {
-      const exIdx = (activeExArray()||[]).findIndex(e => e.name === s.exercise);
-      if (exIdx === -1) return;
-      if (!liveLog[exIdx]) liveLog[exIdx] = { sets:[] };
-      const si = s.set - 1;
-      liveLog[exIdx].sets[si] = { weight:s.weight, reps:s.reps, rpe:s.rpe||"" };
-    });
+    applyDraftToLiveLog(draft);
     renderDayButtons(); renderExercises(); renderLastSession();
     banner.classList.add("hidden"); toast("Draft restored");
   };
@@ -611,6 +623,28 @@ function showDraftBanner(draft, key) {
     banner.classList.add("hidden");
   };
 }
+
+// ── Recover a draft manually ─────────────────────────────────────────────────
+// For when the localStorage draftKey pointer itself is gone or stale (e.g. an
+// older draft from before override-state persistence existed) — searches the
+// Drafts sheet directly for whatever day/date is currently selected.
+async function recoverDraft() {
+  const dateStr = sessDate.slice(0,10);
+  const dayLabel = activeDay===FREEBALL_DAY ? "Freeball" : (activeDay.split("—")[1]?.trim() || activeDay);
+  toast("Checking for a saved draft...");
+  try {
+    const d = await sheetsCall({ action:"read_draft" });
+    const drafts = parseDraftRows(d.rows);
+    const match = Object.values(drafts).find(draft => draft.date === dateStr && draft.day === activeDay);
+    if (!match) { toast(`No saved draft found for ${dayLabel} on ${dateStr}`); return; }
+    applyDraftToLiveLog(match);
+    renderDayButtons(); renderExercises(); renderLastSession();
+    toast(`Recovered draft from ${dateStr}`);
+  } catch(e) {
+    toast("Couldn't check drafts: " + e.message);
+  }
+}
+document.getElementById("recover-draft-btn").addEventListener("click", recoverDraft);
 
 // ── Render exercises ──────────────────────────────────────────────────────────
 async function renderExercises() {
