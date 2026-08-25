@@ -416,14 +416,22 @@ function roundToNearest(val, nearest) { return Math.round(val / nearest) * neare
 // ── Session override mode ────────────────────────────────────────────────────
 // Returns the exercise list currently being edited: the permanent program for
 // activeDay, or a throwaway copy of it while "Override Today" is on. Overrides
-// never touch `exercises`/localStorage — only saveSession's progression update
-// (matched by exercise name) is allowed to feed back into the permanent program.
+// never touch the PERMANENT `exercises`/"il:exercises" — only saveSession's
+// progression update (matched by exercise name) is allowed to feed back into
+// the permanent program. The override list itself is persisted separately
+// (under "il:overrideState") purely so an in-progress override session isn't
+// silently lost if the app is closed and reopened before saving — restored in
+// init() and cleared once the mode turns off or the session is saved.
 function activeExArray() {
   if (overrideMode) return overrideExercises;
   if (!exercises[activeDay]) exercises[activeDay] = [];
   return exercises[activeDay];
 }
-function persistExercises() { if (!overrideMode) lsSet("il:exercises", exercises); }
+function persistExercises() {
+  if (overrideMode) lsSet("il:overrideState", { mode:true, day:activeDay, exercises:overrideExercises });
+  else lsSet("il:exercises", exercises);
+}
+function clearPersistedOverrideState() { lsSet("il:overrideState", null); }
 
 // ── Google Sheets ─────────────────────────────────────────────────────────────
 async function sheetsCall(params) {
@@ -584,8 +592,11 @@ function showDraftBanner(draft, key) {
     activeDay = draft.day; sessDate = draft.date;
     document.getElementById("session-date").value = draft.date;
     liveLog = {}; liveNote = {};
+    // activeExArray() — not the raw permanent list — so a draft logged while
+    // "Override Today" was on (e.g. after an AI swap) still resolves correctly
+    // once init() has restored that override state from localStorage.
     draft.sets.forEach(s => {
-      const exIdx = (exercises[activeDay]||[]).findIndex(e => e.name === s.exercise);
+      const exIdx = (activeExArray()||[]).findIndex(e => e.name === s.exercise);
       if (exIdx === -1) return;
       if (!liveLog[exIdx]) liveLog[exIdx] = { sets:[] };
       const si = s.set - 1;
@@ -1000,6 +1011,7 @@ function renderDayButtons() {
     btn.addEventListener("click",()=>{
       activeDay=d; liveLog={}; liveNote={};
       overrideMode=false; overrideExercises=null;
+      clearPersistedOverrideState();
       const toggle=document.getElementById("override-toggle"); if(toggle) toggle.checked=false;
       document.querySelector(".override-toggle")?.classList.remove("active");
       document.getElementById("override-hint")?.classList.add("hidden");
@@ -1105,6 +1117,7 @@ async function saveSession() {
     if (overrideMode) {
       const savedOverrideEx = overrideExercises;
       overrideMode=false; overrideExercises=null;
+      clearPersistedOverrideState();
       const toggle=document.getElementById("override-toggle"); if(toggle) toggle.checked=false;
       document.querySelector(".override-toggle")?.classList.remove("active");
       document.getElementById("override-hint")?.classList.add("hidden");
@@ -1393,6 +1406,7 @@ document.getElementById("feeling-submit").addEventListener("click", async () => 
             reps: `${ex.repMin}–${ex.repMax}`, weight: ex.weight, unilateral: original.unilateral || false
           };
         });
+        persistExercises();
         liveLog = {}; liveNote = {};
         document.getElementById("feeling-modal").classList.add("hidden");
         renderDayButtons(); renderExercises(); renderLastSession();
@@ -1718,6 +1732,19 @@ async function init() {
   if(!exercises[FREEBALL_DAY]) exercises[FREEBALL_DAY]=[];
   const savedPh=lsGet("il:progHist",null);  if(savedPh)progHist=savedPh;
 
+  // Restore an in-progress override session (if the app was closed before
+  // saving) so draft restoration below can resolve exercise names correctly —
+  // otherwise it'd look them up in the permanent program and silently drop them.
+  const savedOverride = lsGet("il:overrideState", null);
+  if (savedOverride && savedOverride.mode) {
+    activeDay = savedOverride.day || activeDay;
+    overrideMode = true;
+    overrideExercises = savedOverride.exercises || [];
+    document.getElementById("override-toggle").checked = true;
+    document.querySelector(".override-toggle")?.classList.add("active");
+    document.getElementById("override-hint")?.classList.remove("hidden");
+  }
+
   document.getElementById("session-date").value=sessDate;
   document.getElementById("bw-date").value=sessDate;
   document.getElementById("session-date").addEventListener("change",e=>{sessDate=e.target.value;renderLastSession();});
@@ -1736,6 +1763,7 @@ async function init() {
     overrideExercises = overrideMode ? JSON.parse(JSON.stringify(exercises[activeDay]||[])) : null;
     document.querySelector(".override-toggle").classList.toggle("active", overrideMode);
     document.getElementById("override-hint").classList.toggle("hidden", !overrideMode);
+    if (overrideMode) persistExercises(); else clearPersistedOverrideState();
     renderExercises();
   });
   document.getElementById("repo-close").addEventListener("click",()=>document.getElementById("repo-modal").classList.add("hidden"));
