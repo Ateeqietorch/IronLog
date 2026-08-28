@@ -395,6 +395,7 @@ let repoSearch  = "";
 let renderedTargets = {}; // { exIdx: { setIdx: {weight, reps} } } — set at render time
 let overrideMode = false;      // "Override Today" — edits apply to overrideExercises only
 let overrideExercises = null;  // temp copy of the day's exercise list, used only while overrideMode is on
+let pendingLogDesc = null;     // { date, day, exercises } — parsed "log by description" result awaiting Load
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 function todayStr() {
@@ -587,22 +588,41 @@ async function checkForDraft() {
 // currently active list (permanent or override) gets ADDED rather than
 // silently dropped, so a mismatch — override state that didn't survive, an
 // exercise since removed from the program, whatever — never loses data.
-function applyDraftToLiveLog(draft) {
+// Merges a list of { name, sets:[{weight,reps,rpe}, ...], notes } entries into
+// liveLog, against whichever exercise list is currently active (permanent or
+// override — activeExArray() already resolves that). Any exercise not already
+// present gets ADDED rather than dropping its sets, so a name that doesn't
+// match anything programmed — an AI substitution, a description of an
+// off-program exercise, whatever — never silently loses data. `sets` is a
+// positional array (index 0 = set 1); a hole at an index is skipped.
+function mergeSetsIntoLiveLog(entries) {
   const curArr = activeExArray();
   liveLog = {}; liveNote = {};
-  draft.sets.forEach(s => {
-    let exIdx = curArr.findIndex(e => e.name === s.exercise);
+  entries.forEach(entry => {
+    let exIdx = curArr.findIndex(e => e.name === entry.name);
     if (exIdx === -1) {
-      curArr.push({ name:s.exercise, sets:1, reps:"", repMin:1, repMax:20, weight:null, unilateral:false });
+      curArr.push({ name:entry.name, sets:Math.max(1, entry.sets.length), reps:"", repMin:1, repMax:20, weight:null, unilateral:false });
       exIdx = curArr.length - 1;
     }
-    const si = s.set - 1;
-    if (curArr[exIdx].sets < si + 1) curArr[exIdx].sets = si + 1;
+    if (curArr[exIdx].sets < entry.sets.length) curArr[exIdx].sets = entry.sets.length;
     if (!liveLog[exIdx]) liveLog[exIdx] = { sets:[] };
-    liveLog[exIdx].sets[si] = { weight:s.weight, reps:s.reps, rpe:s.rpe||"" };
-    if (s.notes) liveNote[exIdx] = s.notes;
+    entry.sets.forEach((s, si) => {
+      if (!s) return;
+      liveLog[exIdx].sets[si] = { weight:String(s.weight), reps:String(s.reps), rpe:s.rpe?String(s.rpe):"" };
+    });
+    if (entry.notes) liveNote[exIdx] = entry.notes;
   });
   persistExercises();
+}
+
+function applyDraftToLiveLog(draft) {
+  const byExercise = {};
+  draft.sets.forEach(s => {
+    if (!byExercise[s.exercise]) byExercise[s.exercise] = { name:s.exercise, sets:[], notes:"" };
+    byExercise[s.exercise].sets[s.set-1] = { weight:s.weight, reps:s.reps, rpe:s.rpe };
+    if (s.notes) byExercise[s.exercise].notes = s.notes;
+  });
+  mergeSetsIntoLiveLog(Object.values(byExercise));
 }
 
 function showDraftBanner(draft, key) {
@@ -1457,6 +1477,87 @@ document.getElementById("feeling-submit").addEventListener("click", async () => 
     document.getElementById("feeling-error").classList.remove("hidden");
     document.getElementById("feeling-form").classList.remove("hidden");
   }
+});
+
+// ── Log By Description Modal (AI) ────────────────────────────────────────────
+// Parses a free-text description of a workout ALREADY DONE — any date, any
+// day — into actual per-set weight/reps, then loads it into the normal
+// editable session view (via mergeSetsIntoLiveLog) for review before Save.
+// Never writes to the sheet directly.
+function openLogDescModal() {
+  document.getElementById("logdesc-date").value = sessDate;
+  const daySel = document.getElementById("logdesc-day");
+  daySel.innerHTML = allDays().map(d => `<option value="${d}">${d}</option>`).join("");
+  daySel.value = activeDay;
+  document.getElementById("logdesc-text").value = "";
+  document.getElementById("logdesc-form").classList.remove("hidden");
+  document.getElementById("logdesc-loading").classList.add("hidden");
+  document.getElementById("logdesc-result").classList.add("hidden");
+  document.getElementById("logdesc-error").classList.add("hidden");
+  pendingLogDesc = null;
+  document.getElementById("logdesc-modal").classList.remove("hidden");
+}
+document.getElementById("logdesc-open-btn").addEventListener("click", openLogDescModal);
+document.getElementById("logdesc-cancel").addEventListener("click",()=>document.getElementById("logdesc-modal").classList.add("hidden"));
+document.getElementById("logdesc-dismiss").addEventListener("click",()=>document.getElementById("logdesc-modal").classList.add("hidden"));
+
+document.getElementById("logdesc-submit").addEventListener("click", async () => {
+  const date = document.getElementById("logdesc-date").value;
+  const day  = document.getElementById("logdesc-day").value;
+  const description = document.getElementById("logdesc-text").value.trim();
+  if (!date || !day || !description) { toast("Fill in date, day, and a description"); return; }
+  document.getElementById("logdesc-form").classList.add("hidden");
+  document.getElementById("logdesc-error").classList.add("hidden");
+  document.getElementById("logdesc-loading").classList.remove("hidden");
+  try {
+    const dayExercises = (exercises[day]||[]).map(ex => ({ name:ex.name, repMin:ex.repMin, repMax:ex.repMax, weight:ex.weight||0 }));
+    const d = await sheetsCall({
+      action: "ai_log_description", day, date, description,
+      exercises: JSON.stringify(dayExercises)
+    });
+    document.getElementById("logdesc-loading").classList.add("hidden");
+    if (!d.ok || !Array.isArray(d.exercises)) throw new Error(d.msg || "Could not parse");
+
+    pendingLogDesc = { date, day, exercises: d.exercises };
+    document.getElementById("logdesc-preview").innerHTML = d.exercises.map(ex => `
+      <div class="feeling-change-row">
+        <span class="fc-name">${ex.name}</span> — ${ex.sets.map(s=>`${s.weight}×${s.reps}`).join(", ")}
+        ${ex.note ? `<span class="fc-sub">${ex.note}</span>` : ""}
+      </div>`).join("") || `<div class="feeling-change-row">Nothing extracted — try rephrasing.</div>`;
+
+    const clarEl = document.getElementById("logdesc-clarifications");
+    if (d.clarifications && d.clarifications.length) {
+      clarEl.textContent = "⚠ " + d.clarifications.join(" ");
+      clarEl.classList.remove("hidden");
+    } else {
+      clarEl.classList.add("hidden");
+    }
+    document.getElementById("logdesc-result").classList.remove("hidden");
+  } catch(e) {
+    document.getElementById("logdesc-loading").classList.add("hidden");
+    document.getElementById("logdesc-error").textContent = "Couldn't parse: " + e.message;
+    document.getElementById("logdesc-error").classList.remove("hidden");
+    document.getElementById("logdesc-form").classList.remove("hidden");
+  }
+});
+
+document.getElementById("logdesc-load").addEventListener("click", () => {
+  if (!pendingLogDesc || !pendingLogDesc.exercises.length) { toast("Nothing to load"); return; }
+  sessDate = pendingLogDesc.date;
+  document.getElementById("session-date").value = pendingLogDesc.date;
+  activeDay = pendingLogDesc.day;
+  overrideMode = false; overrideExercises = null;
+  clearPersistedOverrideState();
+  const toggle=document.getElementById("override-toggle"); if(toggle) toggle.checked=false;
+  document.querySelector(".override-toggle")?.classList.remove("active");
+  document.getElementById("override-hint")?.classList.add("hidden");
+
+  mergeSetsIntoLiveLog(pendingLogDesc.exercises.map(ex => ({ name:ex.name, sets:ex.sets, notes:ex.note })));
+
+  document.getElementById("logdesc-modal").classList.add("hidden");
+  renderDayButtons(); renderExercises(); renderLastSession();
+  toast(`Loaded ${pendingLogDesc.date} — review and Save Session when ready`);
+  pendingLogDesc = null;
 });
 
 // ── Calendar ──────────────────────────────────────────────────────────────────

@@ -244,6 +244,49 @@ function doGet(e) {
       return respond({ ok: true, adjusted: !!parsed.adjusted, exercises: parsed.exercises, note: parsed.note || "" });
     }
 
+    // ── AI: log a completed session from a free-text description ──────────────
+    // For logging a workout after the fact (done offline, or just easier to type
+    // as a paragraph than fill in every box by hand) — for ANY date, not just
+    // today. Extracts actual per-set weight/reps; never writes to the sheet
+    // itself, just returns structured data for the client to load into the
+    // normal editable session view for review before Save.
+    if (action === "ai_log_description") {
+      const day         = e.parameter.day;
+      const date        = e.parameter.date;
+      const description = e.parameter.description || "";
+      let dayExercises;
+      try { dayExercises = JSON.parse(e.parameter.exercises); } catch (err) { dayExercises = []; }
+
+      const planLines = dayExercises.map(ex =>
+        ex.name + ": " + ex.repMin + "-" + ex.repMax + " reps @ " + (ex.weight || "BW") + (ex.weight ? "lb" : "")
+      ).join("\n");
+
+      const system = "You are a data-extraction assistant embedded in IronLog, a workout tracker. The user is " +
+        "describing, in their own words, a workout they ALREADY COMPLETED (often logged after the fact, possibly " +
+        "days later) — extract the actual weight and reps for each set of each exercise they mention, in order. " +
+        "Match exercise names to the closest one from the day's programmed list below when it's clearly the same " +
+        "movement (fix typos and informal names — e.g. a mention of a 'lying' exercise with curl-like numbers is " +
+        "probably the programmed Leg Curl, not something else), otherwise use the exercise name as the user " +
+        "stated it. Ignore any questions, asides, or commentary that aren't about what was actually done (e.g. " +
+        "questions about form, weight conventions, or how to rate the session) — those are not yours to answer " +
+        "here, extract logged numbers only. If something is genuinely ambiguous (unclear which exercise a number " +
+        "belongs to, missing reps, contradictory info), leave that item out of \"exercises\" and describe it in " +
+        "\"clarifications\" instead of guessing. All weights are in pounds. " +
+        "Respond with ONLY a single valid JSON object and NOTHING else — no preamble, no explanation, no markdown fences, no closing remarks. Your entire response must start with { and end with }, matching exactly this shape: " +
+        '{"exercises": [{"name": string, "sets": [{"weight": number, "reps": number}], "note": string|null}], "clarifications": string[]}';
+
+      const userText = "Training day: " + day + " (" + date + ")\n\nProgrammed exercises for this day:\n" +
+        (planLines || "(no program on record for this day)") +
+        "\n\nUser's description of what they actually did:\n" + description;
+
+      const raw = callClaude(system, userText, 3072);
+      const parsed = parseClaudeJson(raw);
+      if (!parsed || !Array.isArray(parsed.exercises)) {
+        return respond({ ok: false, msg: "Could not parse AI response. Raw: " + String(raw).slice(0, 500) });
+      }
+      return respond({ ok: true, exercises: parsed.exercises, clarifications: parsed.clarifications || [] });
+    }
+
     return respond({ ok: false, msg: "unknown action: " + action });
 
   } catch(err) {

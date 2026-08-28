@@ -293,6 +293,10 @@ input::placeholder { color:var(--text4); }
 .reconsider-error { font-size:11px; color:var(--red); padding:10px 0; line-height:1.5; }
 .btn-reconsider { color:#3a2a1a; } .btn-reconsider:hover { color:var(--gold); background:#1a1408; }
 
+/* LOG BY DESCRIPTION */
+.logdesc-select { width:100%; background:var(--bg3); border:1px solid var(--border2); color:var(--text); font-family:var(--font-mono); font-size:13px; padding:7px 8px; border-radius:3px; outline:none; }
+.logdesc-select:focus { border-color:var(--gold); }
+
 /* FEELING CHECK */
 .btn-feeling-check { width:100%; background:none; border:1px dashed #3a3018; color:#c8b06e; cursor:pointer; font-family:var(--font-mono); font-size:11px; letter-spacing:.06em; padding:9px; border-radius:3px; margin-bottom:12px; transition:all .2s; }
 .btn-feeling-check:hover { border-color:var(--gold); background:#1a1508; }

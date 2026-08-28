@@ -63,6 +63,7 @@
         </div>
         <button id="feeling-check-btn" class="btn-feeling-check">💬 How are you feeling today?</button>
         <button id="recover-draft-btn" class="btn-feeling-check">🔍 Check for a saved draft</button>
+        <button id="logdesc-open-btn" class="btn-feeling-check">📝 Log a past session by description</button>
         <div id="last-session-box" class="last-session hidden">
           <div id="last-session-title" class="last-session-title"></div>
           <pre id="last-session-body" class="last-session-body"></pre>
@@ -244,6 +245,37 @@
         </div>
       </div>
       <div id="feeling-error" class="hidden reconsider-error"></div>
+    </div>
+  </div>
+
+  <!-- LOG BY DESCRIPTION MODAL -->
+  <div id="logdesc-modal" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-title">LOG A PAST SESSION</div>
+      <div class="modal-sub">Describe what you actually did — any date, any day, in your own words.</div>
+      <div id="logdesc-form">
+        <div class="field-label">DATE</div>
+        <input type="date" id="logdesc-date" style="width:100%;margin-bottom:10px" />
+        <div class="field-label">TRAINING DAY</div>
+        <select id="logdesc-day" class="logdesc-select"></select>
+        <div class="field-label mt">WHAT DID YOU DO?</div>
+        <textarea id="logdesc-text" class="reconsider-textarea" rows="6" placeholder="e.g. Hack squat 140x10,10,9,3. RDL 135x10 for 4 sets. Leg curl 100x10,9,8..."></textarea>
+        <div class="modal-buttons" style="margin-top:14px">
+          <button id="logdesc-submit" class="btn-primary" style="flex:1">Parse</button>
+          <button id="logdesc-cancel" class="btn-ghost">Cancel</button>
+        </div>
+      </div>
+      <div id="logdesc-loading" class="hidden reconsider-loading">Parsing your description...</div>
+      <div id="logdesc-result" class="hidden">
+        <div class="field-label">PARSED</div>
+        <div id="logdesc-preview" class="feeling-changes"></div>
+        <div id="logdesc-clarifications" class="hidden reconsider-error"></div>
+        <div class="modal-buttons">
+          <button id="logdesc-load" class="btn-primary" style="flex:1">Load into Session</button>
+          <button id="logdesc-dismiss" class="btn-ghost">Discard</button>
+        </div>
+      </div>
+      <div id="logdesc-error" class="hidden reconsider-error"></div>
     </div>
   </div>
 
