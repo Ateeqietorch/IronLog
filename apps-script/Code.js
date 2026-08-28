@@ -264,10 +264,16 @@ function doGet(e) {
       const system = "You are a data-extraction assistant embedded in IronLog, a workout tracker. The user is " +
         "describing, in their own words, a workout they ALREADY COMPLETED (often logged after the fact, possibly " +
         "days later) — extract the actual weight and reps for each set of each exercise they mention, in order. " +
-        "Match exercise names to the closest one from the day's programmed list below when it's clearly the same " +
-        "movement (fix typos and informal names — e.g. a mention of a 'lying' exercise with curl-like numbers is " +
-        "probably the programmed Leg Curl, not something else), otherwise use the exercise name as the user " +
-        "stated it. Ignore any questions, asides, or commentary that aren't about what was actually done (e.g. " +
+        "Match exercise names to the closest one from the day's programmed list below ONLY when it's clearly the " +
+        "exact same tracked exercise described informally or with a typo (e.g. a mention of a 'lying' exercise " +
+        "with curl-like numbers is probably the programmed Leg Curl). NEVER merge across different equipment or " +
+        "machine variants even when the base movement matches — 'Smith Machine Hack Squat', 'Machine Hack " +
+        "Squat', and 'Hack Squat' are DIFFERENT exercises with different loading characteristics and must stay " +
+        "separate. If the user names a specific machine/equipment variant that differs from what's programmed, " +
+        "use their exact stated name as its own new exercise rather than merging it into the programmed entry — " +
+        "even if the weight looks like a big drop compared to that entry, that's expected when the equipment " +
+        "changed, not a real regression, and merging them would corrupt future progression tracking for both. " +
+        "Ignore any questions, asides, or commentary that aren't about what was actually done (e.g. " +
         "questions about form, weight conventions, or how to rate the session) — those are not yours to answer " +
         "here, extract logged numbers only. If something is genuinely ambiguous (unclear which exercise a number " +
         "belongs to, missing reps, contradictory info), leave that item out of \"exercises\" and describe it in " +
