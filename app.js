@@ -56,7 +56,7 @@ const MUSCLE_GROUPS_MAP = {
   "Chest": ["Barbell Bench Press","Incline Barbell Press","Incline Dumbbell Press","Dumbbell Bench Press","Pec Deck / Cable Fly","Cable Crossover","Dumbbell Fly","Push-Up","Incline Barbell Bench Press"],
   "Shoulders": ["Barbell Overhead Press","Dumbbell Shoulder Press","Cable Lateral Raise","Dumbbell Lateral Raise","Rear Delt Fly","Face Pull","Upright Row"],
   "Triceps": ["Tricep Rope Pushdown","V-Bar Pushdown","Overhead Tricep Extension","Tricep Dip","Skull Crusher","Single Arm Pushdown"],
-  "Back": ["Weighted Pull-Up","Lat Pulldown","Barbell Pendlay Row","Seated Cable Row","Chest-Supported DB Row","Chest-Supported T-Bar Row","Single-Arm Cable Row","Single-Arm DB Row","Straight Arm Pulldown","Weighted Pull-Up / Lat Pulldown"],
+  "Back": ["Weighted Pull-Up","Lat Pulldown","Seated Cable Row","Chest-Supported DB Row","Chest-Supported T-Bar Row","Single-Arm Cable Row","Single-Arm DB Row","Straight Arm Pulldown","Weighted Pull-Up / Lat Pulldown"],
   "Biceps": ["EZ Bar Curl","Barbell Curl","Incline Dumbbell Curl","Hammer Curl","Cable Curl","Concentration Curl"],
   "Quads": ["Hack Squat","Leg Press","Single Leg Leg Press","Leg Extension","Single Leg Extension","Bulgarian Split Squat","Walking Lunges (DB)"],
   "Hamstrings": ["Romanian Deadlift","Stiff-Leg Deadlift (DB)","Leg Curl","Leg Curl (seated)","Single Leg Curl"],
@@ -96,7 +96,6 @@ const EXERCISE_REPO = [
   { name:"Single Arm Pushdown",       group:"Triceps",    repMin:12, repMax:15, unilateral:true,  weight:25  },
   { name:"Weighted Pull-Up",          group:"Back",       repMin:6,  repMax:8,  unilateral:false, weight:null},
   { name:"Lat Pulldown",              group:"Back",       repMin:8,  repMax:12, unilateral:false, weight:155 },
-  { name:"Barbell Pendlay Row",       group:"Back",       repMin:6,  repMax:8,  unilateral:false, weight:155 },
   { name:"Seated Cable Row",          group:"Back",       repMin:10, repMax:12, unilateral:false, weight:143 },
   { name:"Chest-Supported DB Row",    group:"Back",       repMin:10, repMax:12, unilateral:false, weight:66  },
   { name:"Chest-Supported T-Bar Row", group:"Back",       repMin:8,  repMax:10, unilateral:false, weight:110 },
@@ -143,7 +142,7 @@ const DEFAULTS = {
   ],
   "Day 2 — Pull": [
     { name:"Weighted Pull-Up / Lat Pulldown", sets:4, reps:"6–8",   repMin:6,  repMax:8,  weight:155, unilateral:false },
-    { name:"Barbell Pendlay Row",             sets:4, reps:"6–8",   repMin:6,  repMax:8,  weight:155, unilateral:false },
+    { name:"Chest-Supported T-Bar Row",       sets:4, reps:"8–10",  repMin:8,  repMax:10, weight:110, unilateral:false },
     { name:"Seated Cable Row",                sets:3, reps:"10–12", repMin:10, repMax:12, weight:143, unilateral:false },
     { name:"Chest-Supported DB Row",          sets:3, reps:"10–12", repMin:10, repMax:12, weight:66,  unilateral:false },
     { name:"Face Pull",                       sets:4, reps:"15–20", repMin:15, repMax:20, weight:44,  unilateral:false },
@@ -314,9 +313,13 @@ function evaluateDeloadSignal() {
 function getMesocycleState() {
   const today = todayStr();
   let meso = lsGet("il:mesocycle", null);
-  if (!meso) {
-    const dates = Object.values(sessions).map(s => s.date).filter(Boolean).sort();
-    meso = { cycleStart: dates[0] || today, deloadStart: null, deloadReason: null };
+  // `seeded` marks state written by THIS logic. Anything missing it is either
+  // brand new, or was seeded by an earlier buggy version that backdated
+  // cycleStart to the earliest-ever logged session — which for anyone with
+  // more than 6 weeks of history meant an immediate, wrong deload on first
+  // load. Both cases get the same fix: start the cycle fresh from today.
+  if (!meso || !meso.seeded) {
+    meso = { cycleStart: today, deloadStart: null, deloadReason: null, seeded: true };
     lsSet("il:mesocycle", meso);
   }
 
@@ -351,7 +354,7 @@ function getMesocycleState() {
 // Called when the AI Session Review recommends an early deload — same
 // mechanism as the automatic triggers above, just AI-initiated.
 function triggerAiDeload(reason) {
-  const meso = lsGet("il:mesocycle", { cycleStart: todayStr(), deloadStart: null, deloadReason: null });
+  const meso = lsGet("il:mesocycle", { cycleStart: todayStr(), deloadStart: null, deloadReason: null, seeded: true });
   meso.deloadStart = todayStr();
   meso.deloadReason = reason || "AI-recommended deload based on your recent session review.";
   lsSet("il:mesocycle", meso);
@@ -363,7 +366,7 @@ function triggerAiDeload(reason) {
 // clearing deloadStart — otherwise a scheduled deload past week 6 would
 // re-trigger itself on the very next getMesocycleState() call.
 function cancelDeload() {
-  lsSet("il:mesocycle", { cycleStart: todayStr(), deloadStart: null, deloadReason: null });
+  lsSet("il:mesocycle", { cycleStart: todayStr(), deloadStart: null, deloadReason: null, seeded: true });
 }
 
 // Descending target RPE across an exercise's sets — more reserve on early

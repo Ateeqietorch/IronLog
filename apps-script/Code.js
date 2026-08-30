@@ -128,8 +128,10 @@ function doGet(e) {
 
       const system = "You are a hypertrophy-training assistant embedded in IronLog, a workout tracker for an " +
         "intermediate-to-advanced lifter. All weights are in pounds. Never suggest Barbell Back Squat or Barbell " +
-        "Deadlift as a substitute (use Hack Squat / Romanian Deadlift patterns instead). Given the exercise the " +
-        "user wants reconsidered and their stated reason, propose ONE substitute exercise (can be a different " +
+        "Deadlift as a substitute (use Hack Squat / Romanian Deadlift patterns instead). The user wants to " +
+        "preserve their lower back, so never suggest a free-standing, unsupported bent-over row (e.g. Pendlay " +
+        "Row, Bent-Over Row) — chest-supported rows (T-Bar, DB) and seated cable/machine rows are fine. Given " +
+        "the exercise the user wants reconsidered and their stated reason, propose ONE substitute exercise (can be a different " +
         "movement pattern, or the same exercise with adjusted parameters if that better fits the reason) with " +
         "adjusted sets/rep range/working weight, and a brief rationale (1-2 sentences). " +
         "Respond with ONLY a single valid JSON object and NOTHING else — no preamble, no explanation, no markdown fences, no closing remarks. Your entire response must start with { and end with }, matching exactly this shape: " +
@@ -235,7 +237,9 @@ function doGet(e) {
 
       const system = "You are a hypertrophy-training assistant embedded in IronLog. Before the user starts " +
         "today's session, decide whether their stated feeling warrants adjusting it. All weights are in pounds. " +
-        "Never suggest Barbell Back Squat or Barbell Deadlift. You may reduce weight/sets/reps on some or all " +
+        "Never suggest Barbell Back Squat or Barbell Deadlift. The user wants to preserve their lower back, so " +
+        "never substitute in a free-standing, unsupported bent-over row (e.g. Pendlay Row, Bent-Over Row) — " +
+        "chest-supported rows (T-Bar, DB) and seated cable/machine rows are fine. You may reduce weight/sets/reps on some or all " +
         "exercises (e.g. fatigue, soreness, low sleep), substitute an exercise (e.g. to avoid a sore joint), or " +
         "make no changes if the note doesn't warrant it — most notes should NOT change a well-designed session. " +
         "Keep \"note\" to ONE short sentence — do not explain your reasoning per exercise, just state the object. " +
