@@ -628,6 +628,7 @@ let selectedE1RMEx = null;
 let repoFilter  = "";
 let repoSearch  = "";
 let renderedTargets = {}; // { exIdx: { setIdx: {weight, reps} } } — set at render time
+let struggleSetAdded = {}; // { exIdx: true } — guards against re-adding a set on every keystroke of a struggling set 1
 let overrideMode = false;      // "Override Today" — edits apply to overrideExercises only
 let overrideExercises = null;  // temp copy of the day's exercise list, used only while overrideMode is on
 let pendingLogDesc = null;     // { date, day, exercises } — parsed "log by description" result awaiting Load
@@ -833,7 +834,7 @@ async function checkForDraft() {
 // positional array (index 0 = set 1); a hole at an index is skipped.
 function mergeSetsIntoLiveLog(entries) {
   const curArr = activeExArray();
-  liveLog = {}; liveNote = {};
+  liveLog = {}; liveNote = {}; struggleSetAdded = {};
   entries.forEach(entry => {
     let exIdx = curArr.findIndex(e => e.name === entry.name);
     if (exIdx === -1) {
@@ -1129,16 +1130,27 @@ function checkFirstSetStruggle(exIdx, setIdx) {
     return;
   }
 
-  const threshold = targetReps * (1 - STRUGGLE_THRESHOLD);
+  const actualWeight = parseFloat(st.weight);
+  const rpe = parseFloat(st.rpe);
+  const hasWeight = !isNaN(actualWeight) && actualWeight > 0;
+  const pinnedRpe = !isNaN(rpe) && rpe >= 9.5; // took it to true failure
 
-  if (actual >= threshold) {
+  const repsShort = actual < targetReps * (1 - STRUGGLE_THRESHOLD);
+  const struggling = repsShort || pinnedRpe;
+
+  if (!struggling) {
     if (card) card.querySelector(".ex-alert.struggle")?.remove();
     if (exIdx === 0) document.getElementById("workout-alert").classList.add("hidden");
     return;
   }
 
-  // Struggling on set 1
-  const suggestedWeight = roundToNearest(ex.weight * (1 - WEIGHT_DROP_PCT), 2.5);
+  // Anchor the backoff on what was ACTUALLY lifted this set, not the stale
+  // program target — otherwise a self-reduced weight that still hit failure
+  // (e.g. dropped from 31 to 23 and still maxed out at RPE 10) gets a
+  // suggestion computed off the higher, already-rejected number, which can
+  // come out ABOVE what was just failed.
+  const baseWeight = hasWeight ? Math.min(actualWeight, ex.weight) : ex.weight;
+  const suggestedWeight = roundToNearest(baseWeight * (1 - WEIGHT_DROP_PCT), 2.5);
   const isFirstCompound = exIdx === 0 && ex.repMax <= 10;
 
   if (card) {
@@ -1148,10 +1160,14 @@ function checkFirstSetStruggle(exIdx, setIdx) {
       alertEl.className = "ex-alert struggle";
       card.querySelector(".sets-container").before(alertEl);
     }
-    alertEl.textContent = `⚠ Set 1 below threshold — drop to ${suggestedWeight}lb for remaining sets, adding 1 set at ${suggestedWeight}lb`;
+    const rpeNote = pinnedRpe ? ` (RPE ${rpe} — true failure)` : "";
+    alertEl.textContent = `⚠ Set 1 below threshold${rpeNote} — drop to ${suggestedWeight}lb for remaining sets, adding 1 set at ${suggestedWeight}lb`;
 
-    // Auto-add a set if repMax <= 10 (compound) and not already added
-    if (ex.repMax <= 10 && ex.sets < 6) {
+    // Auto-add a set if repMax <= 10 (compound) and not already added for
+    // this struggling set 1 — guarded so re-evaluating on every subsequent
+    // keystroke (weight, reps, RPE) doesn't keep stacking extra sets.
+    if (ex.repMax <= 10 && ex.sets < 6 && !struggleSetAdded[exIdx]) {
+      struggleSetAdded[exIdx] = true;
       activeExArray()[exIdx].sets++;
       persistExercises();
       const si = activeExArray()[exIdx].sets - 1;
@@ -1187,7 +1203,7 @@ function bindExerciseInputs(container, curEx) {
         if (!e1rmEl) { e1rmEl=document.createElement("span"); e1rmEl.className="e1rm-display"; row.appendChild(e1rmEl); }
         e1rmEl.innerHTML = `e1RM:<span class="e1rm-val">${e1rm}</span>`;
       }
-      if (field!=="rpe") checkFirstSetStruggle(i, si);
+      checkFirstSetStruggle(i, si);
       saveDraft();
     });
   });
@@ -1326,7 +1342,7 @@ function renderDayButtons() {
     btn.className="day-btn"+(d===activeDay?" active":"")+(isFree?" freeball":"");
     btn.textContent= isFree ? "＋ Freeball" : (d.split("—")[1]?.trim() || d);
     btn.addEventListener("click",()=>{
-      activeDay=d; liveLog={}; liveNote={};
+      activeDay=d; liveLog={}; liveNote={}; struggleSetAdded={};
       overrideMode=false; overrideExercises=null;
       clearPersistedOverrideState();
       const toggle=document.getElementById("override-toggle"); if(toggle) toggle.checked=false;
@@ -1432,7 +1448,7 @@ async function saveSession() {
 
     sessions=parseSessionRows((await sheetsCall({action:"read"})).rows);
     setSyncStatus("synced");
-    liveLog={}; liveNote={};
+    liveLog={}; liveNote={}; struggleSetAdded={};
     document.getElementById("workout-alert").classList.add("hidden");
 
     // Override session: offer to promote it to a permanent day before resetting.
@@ -1766,7 +1782,7 @@ document.getElementById("feeling-submit").addEventListener("click", async () => 
           };
         });
         persistExercises();
-        liveLog = {}; liveNote = {};
+        liveLog = {}; liveNote = {}; struggleSetAdded = {};
         document.getElementById("feeling-modal").classList.add("hidden");
         renderDayButtons(); renderExercises(); renderLastSession();
         toast("Session adjusted for today");
