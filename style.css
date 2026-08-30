@@ -45,6 +45,8 @@ html,body { background:var(--bg); color:var(--text); font-family:var(--font-mono
 
 /* WORKOUT ALERT */
 .workout-alert { background:#1a1210; border:1px solid var(--red); border-radius:4px; padding:10px 13px; margin-bottom:14px; font-size:11px; color:var(--red); line-height:1.6; }
+.meso-banner { background:var(--bg2); border:1px solid var(--border2); border-radius:4px; padding:8px 13px; margin-bottom:14px; font-size:10px; color:var(--text3); letter-spacing:.02em; line-height:1.5; }
+.meso-banner.deload { background:#0a1420; border-color:#1a3050; color:#8ab0e0; }
 .workout-alert.warning { border-color:var(--yellow); color:var(--yellow); background:#1a1a10; }
 
 /* LABELS */
@@ -111,6 +113,7 @@ input::placeholder { color:var(--text4); }
 .set-num { font-size:9px; color:var(--text4); min-width:18px; flex-shrink:0; }
 .set-target { font-size:9px; color:var(--text3); white-space:nowrap; flex-shrink:0; background:var(--bg3); border:1px solid var(--border2); padding:4px 6px; border-radius:2px; }
 .set-target .target-val { color:var(--gold); }
+.set-target .target-rpe { color:var(--text3); font-size:8px; }
 .btn-check { background:none; border:1px solid #2a3a2a; color:#2a3a2a; cursor:pointer; font-size:13px; padding:3px 7px; border-radius:2px; transition:all .2s; line-height:1; flex-shrink:0; }
 .btn-check.hit { background:#1a2a1a; border-color:var(--green); color:var(--green); }
 .side-label { font-size:8px; color:var(--text3); letter-spacing:.08em; flex-shrink:0; }
@@ -130,6 +133,8 @@ input::placeholder { color:var(--text4); }
 .ex-alert.pr { color:var(--green); background:#081a08; border:1px solid #183a18; }
 .ex-alert.backoff { color:var(--yellow); background:#1a1608; border:1px solid #3a3018; }
 .ex-alert.fatigue { color:var(--yellow); background:#1a1608; border:1px solid #3a3018; }
+.ex-alert.deload { color:#8ab0e0; background:#0a1420; border:1px solid #1a3050; }
+.ex-alert.hold { color:var(--text2); background:var(--bg3); border:1px solid var(--border2); }
 
 /* BADGE */
 .badge-uni { font-size:8px; color:var(--gold); border:1px solid var(--gold); border-radius:2px; padding:1px 5px; letter-spacing:.06em; margin-left:5px; vertical-align:middle; }
@@ -151,6 +156,8 @@ input::placeholder { color:var(--text4); }
 .session-review-title { font-size:9px; color:var(--gold); letter-spacing:.15em; text-transform:uppercase; margin-bottom:8px; }
 .session-review-body { font-size:11px; color:var(--text2); line-height:1.6; }
 .session-review-body.loading { color:var(--text3); font-style:italic; }
+.session-review-applied { margin-top:10px; padding-top:10px; border-top:1px solid var(--border2); font-size:10px; color:#8ab0e0; line-height:1.7; }
+.session-review-applied .sra-item { display:block; }
 
 /* BUTTONS */
 .btn-primary { background:var(--gold); color:#0a0a0a; border:none; cursor:pointer; font-family:var(--font-mono); font-size:11px; font-weight:500; letter-spacing:.1em; text-transform:uppercase; padding:11px 24px; border-radius:2px; transition:background .2s; }

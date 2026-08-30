@@ -179,25 +179,36 @@ function doGet(e) {
       const sessionLog = formatRowsForReview(sessionRows);
       const priorLog    = recentDayHistoryExcluding(ss, day, sessionKey, 3);
 
-      const system = "You are a hypertrophy-training coach reviewing a just-completed workout logged in IronLog. " +
-        "Write a short, honest, encouraging coaching summary (3-5 sentences): call out notable trends (volume " +
-        "trending low/high on a muscle group, RPE drift upward, a pattern of missed/incomplete sets), and if " +
-        "relevant, one concrete suggestion for the next session on this day. Never suggest Barbell Back Squat or " +
-        "Barbell Deadlift. Respond with ONLY a single valid JSON object and NOTHING else — no preamble, no explanation, no markdown fences, no closing remarks. Your entire response must start with { and end with }, matching exactly this shape: " +
-        '{"summary": string}';
+      const system = "You are a hypertrophy-training coach reviewing a just-completed workout logged in IronLog, " +
+        "which auto-applies your recommendations (with the user notified, not asked to confirm each one) — so " +
+        "only recommend a change you're genuinely confident about, not a passing observation. Write a short, " +
+        "honest, encouraging coaching summary (3-5 sentences): call out notable trends (volume trending low/high " +
+        "on a muscle group, RPE drift upward, a pattern of missed/incomplete sets), and if relevant, one concrete " +
+        "suggestion for the next session on this day. Separately, decide: (1) should training deload soon — only " +
+        "recommend this for a clear, sustained pattern (RPE pinned near failure across multiple sessions, " +
+        "stalling/declining performance on multiple exercises), not from one hard session; (2) for any exercise " +
+        "that should HOLD at its current weight/reps next time rather than progress (e.g. it's clearly grinding, " +
+        "form is breaking down per the notes, or it just took a big jump and needs a session to stabilize) — most " +
+        "exercises most sessions should NOT be flagged, only genuinely warranted ones. Never suggest Barbell Back " +
+        "Squat or Barbell Deadlift. Respond with ONLY a single valid JSON object and NOTHING else — no preamble, no explanation, no markdown fences, no closing remarks. Your entire response must start with { and end with }, matching exactly this shape: " +
+        '{"summary": string, "deload_recommended": boolean, "deload_reason": string|null, ' +
+        '"adjustments": [{"exercise": string, "hold": boolean, "note": string}]}';
 
       const userText = "Training day: " + day + " (" + date + ")\n\nJust-logged session:\n" + sessionLog +
         "\n\nRecent sessions on this same day for comparison:\n" + (priorLog || "No prior sessions on record.");
 
-      const raw = callClaude(system, userText, 1536);
+      const raw = callClaude(system, userText, 2048);
       const parsed = parseClaudeJson(raw);
       const summary = parsed && parsed.summary ? parsed.summary : raw;
+      const deloadRecommended = !!(parsed && parsed.deload_recommended);
+      const deloadReason = (parsed && parsed.deload_reason) || "";
+      const adjustments = (parsed && Array.isArray(parsed.adjustments)) ? parsed.adjustments.filter(a => a && a.hold) : [];
 
       const summarySheet = getOrCreateSheet(ss, SUMMARIES_SHEET, ["SessionKey", "Date", "Day", "SummaryText", "Timestamp"]);
       clearByKey(summarySheet, sessionKey, 0);
       summarySheet.appendRow([sessionKey, date, day, summary, new Date().toISOString()]);
 
-      return respond({ ok: true, summary });
+      return respond({ ok: true, summary, deloadRecommended, deloadReason, adjustments });
     }
 
     // ── AI: pre-session sanity check ───────────────────────────────────────────

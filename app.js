@@ -13,6 +13,18 @@ const MEV_SETS            = 10;   // fallback minimum effective volume per muscl
 const MRV_SETS            = 20;   // fallback maximum recoverable volume per muscle/week
 const HARD_SET_RPE        = 7;    // sets at/above this RPE count as "hard" (growth-driving)
 
+// Mesocycle / deload constants. Evidence: ~4-8wk blocks for trained lifters,
+// ~30-50% volume/intensity cut for ~1wk deloads. We default to a 6-week
+// cycle per user preference, but evaluate on every load rather than just
+// counting down — sustained near-failure RPE (or an AI review's judgment)
+// can pull a deload forward before the scheduled week arrives.
+const MESOCYCLE_WEEKS    = 6;
+const DELOAD_DAYS        = 7;
+const DELOAD_RPE_CAP     = 8;    // target RPE never exceeds this during a deload
+const DELOAD_WEIGHT_PCT  = 0.85; // working weight cut during a deload
+const DELOAD_SET_PCT     = 0.5;  // set count cut during a deload
+const DELOAD_TRIGGER_RPE = 9.3;  // avg RPE at/above this over the recent window = early trigger
+
 // Per-muscle weekly volume landmarks (hard sets). Based on typical hypertrophy
 // ranges — smaller muscles recover faster and tolerate/need less; back & delts
 // tolerate more. These are DEFAULTS; user can override per muscle (saved locally).
@@ -266,6 +278,183 @@ function median(nums) {
   return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
 }
 
+// ── Mesocycle / Deload engine ────────────────────────────────────────────────
+function daysBetween(a, b) { return Math.round((new Date(b) - new Date(a)) / 86400000); }
+
+// Scans the most recent handful of session dates across the WHOLE program for
+// sustained near-failure effort — an early/fatigue-triggered deload signal,
+// independent of the scheduled cadence.
+function evaluateDeloadSignal() {
+  const recentDates = [...new Set(Object.values(sessions).map(s => s.date))].sort().slice(-6);
+  if (recentDates.length < 3) return null;
+  let rpeSum = 0, rpeCount = 0;
+  Object.values(sessions).forEach(sess => {
+    if (!recentDates.includes(sess.date)) return;
+    Object.values(sess.exercises).forEach(sets => sets.forEach(s => {
+      const rpe = parseFloat(s.rpe);
+      if (isNaN(rpe)) return;
+      const wt = String(s.weight || ""), rp = String(s.reps || "");
+      if (wt.includes("L:") || rp.includes("L:")) return; // skip unilateral rows, format differs
+      if (!isWorkingSet(wt, rp)) return;
+      rpeSum += rpe; rpeCount++;
+    }));
+  });
+  if (rpeCount < 6) return null;
+  const avgRpe = rpeSum / rpeCount;
+  if (avgRpe >= DELOAD_TRIGGER_RPE) {
+    return `Average RPE across your last ${recentDates.length} sessions is ${avgRpe.toFixed(1)} — sustained near-failure training, time to back off.`;
+  }
+  return null;
+}
+
+// Returns { weekNum, inDeload, reason }. Persists cycle/deload start dates in
+// localStorage but RE-EVALUATES every call rather than just counting down, so
+// evaluateDeloadSignal() (or an AI review via triggerAiDeload()) can pull a
+// deload forward before the scheduled MESOCYCLE_WEEKS are up.
+function getMesocycleState() {
+  const today = todayStr();
+  let meso = lsGet("il:mesocycle", null);
+  if (!meso) {
+    const dates = Object.values(sessions).map(s => s.date).filter(Boolean).sort();
+    meso = { cycleStart: dates[0] || today, deloadStart: null, deloadReason: null };
+    lsSet("il:mesocycle", meso);
+  }
+
+  if (meso.deloadStart) {
+    if (daysBetween(meso.deloadStart, today) >= DELOAD_DAYS) {
+      meso = { cycleStart: today, deloadStart: null, deloadReason: null };
+      lsSet("il:mesocycle", meso);
+    } else {
+      return { weekNum: MESOCYCLE_WEEKS, inDeload: true, reason: meso.deloadReason || "Scheduled deload week." };
+    }
+  }
+
+  const weekNum = Math.floor(daysBetween(meso.cycleStart, today) / 7) + 1;
+  if (weekNum > MESOCYCLE_WEEKS) {
+    meso.deloadStart = today;
+    meso.deloadReason = `${MESOCYCLE_WEEKS} weeks into this training block — scheduled deload.`;
+    lsSet("il:mesocycle", meso);
+    return { weekNum: MESOCYCLE_WEEKS, inDeload: true, reason: meso.deloadReason };
+  }
+
+  const fatigueReason = evaluateDeloadSignal();
+  if (fatigueReason) {
+    meso.deloadStart = today;
+    meso.deloadReason = fatigueReason;
+    lsSet("il:mesocycle", meso);
+    return { weekNum, inDeload: true, reason: fatigueReason };
+  }
+
+  return { weekNum, inDeload: false, reason: null };
+}
+
+// Called when the AI Session Review recommends an early deload — same
+// mechanism as the automatic triggers above, just AI-initiated.
+function triggerAiDeload(reason) {
+  const meso = lsGet("il:mesocycle", { cycleStart: todayStr(), deloadStart: null, deloadReason: null });
+  meso.deloadStart = todayStr();
+  meso.deloadReason = reason || "AI-recommended deload based on your recent session review.";
+  lsSet("il:mesocycle", meso);
+}
+
+// Descending target RPE across an exercise's sets — more reserve on early
+// sets, tightening toward failure on the last one (Schoenfeld's within-
+// session RIR structure), rather than the same effort on every set.
+function targetRPEForSet(si, totalSets, inDeload) {
+  if (inDeload) return DELOAD_RPE_CAP;
+  if (totalSets <= 1) return 9;
+  const frac = si / (totalSets - 1);
+  return Math.round((7.5 + frac * 2) * 2) / 2; // 7.5 -> 9.5 in 0.5 steps
+}
+
+// AI Session Review can auto-apply a light "hold volume, don't progress yet"
+// flag per exercise — read back into computeTarget below.
+function getAiAdjustment(exName) {
+  const store = lsGet("il:aiAdjustments", {});
+  return store[exName] || null;
+}
+function setAiAdjustment(exName, adj) {
+  const store = lsGet("il:aiAdjustments", {});
+  if (adj) store[exName] = adj; else delete store[exName];
+  lsSet("il:aiAdjustments", store);
+}
+function clearAiAdjustment(exName) { setAiAdjustment(exName, null); }
+
+// Ramps each muscle group's total weekly hard-set count from MEV toward MRV
+// across the mesocycle (research: add ~1-2 sets/muscle/week toward MRV, then
+// deload). Applied once per week/deload TRANSITION rather than every render,
+// so it doesn't fight with a manual +/- adjustment mid-week. Mutates the
+// PERMANENT program across every day (a muscle group can span multiple
+// training days) and persists like any other program edit.
+function applyVolumeRamp(meso) {
+  const rampState = lsGet("il:volumeRamp", {});
+  const key = meso.inDeload ? "deload" : "w" + meso.weekNum;
+  if (rampState.lastKey === key) return; // already ramped for this state
+  const wasInDeload = rampState.lastKey === "deload";
+  let changed = false;
+
+  MUSCLE_GROUPS.forEach(group => {
+    const { mev, mrv } = getLandmarks(group);
+    if (mrv <= 0) return;
+
+    const entries = [];
+    allProgramDays().forEach(day => {
+      (exercises[day] || []).forEach(ex => { if (getMuscleGroup(ex.name) === group) entries.push(ex); });
+    });
+    if (!entries.length) return;
+
+    if (meso.inDeload) {
+      if (wasInDeload) return; // already cut for this deload
+      entries.forEach(ex => {
+        if (ex._preDeloadSets == null) ex._preDeloadSets = ex.sets;
+        ex.sets = Math.max(1, Math.round(ex._preDeloadSets * DELOAD_SET_PCT));
+      });
+      changed = true;
+      return;
+    }
+
+    // Coming out of a deload — restore pre-deload counts before ramping further.
+    if (wasInDeload) {
+      entries.forEach(ex => {
+        if (ex._preDeloadSets != null) { ex.sets = ex._preDeloadSets; delete ex._preDeloadSets; }
+      });
+      changed = true;
+    }
+
+    const weeklyTarget = Math.round(mev + (mrv - mev) * Math.min(meso.weekNum, MESOCYCLE_WEEKS) / MESOCYCLE_WEEKS);
+    let currentTotal = entries.reduce((sum, ex) => sum + ex.sets, 0);
+    let guard = 0;
+    while (currentTotal < weeklyTarget && guard < 20) {
+      const candidate = entries
+        .filter(ex => ex.sets < (ex._rampBase ?? ex.sets) + 3) // cap how far any one exercise can balloon
+        .sort((a, b) => a.sets - b.sets)[0];
+      if (!candidate) break;
+      if (candidate._rampBase == null) candidate._rampBase = candidate.sets;
+      candidate.sets++;
+      currentTotal++;
+      changed = true;
+      guard++;
+    }
+  });
+
+  if (changed) lsSet("il:exercises", exercises);
+  lsSet("il:volumeRamp", { lastKey: key });
+}
+
+// Session-tab banner explaining the current mesocycle week or an active deload.
+function renderMesoBanner(meso) {
+  const el = document.getElementById("meso-banner");
+  if (!el) return;
+  if (meso.inDeload) {
+    el.className = "meso-banner deload";
+    el.textContent = `🔻 Deload week — ${meso.reason || "reduced volume and intensity this week."}`;
+  } else {
+    el.className = "meso-banner";
+    el.textContent = `Week ${meso.weekNum} of ${MESOCYCLE_WEEKS} — volume ramping toward MRV, deload after week ${MESOCYCLE_WEEKS}.`;
+  }
+  el.classList.remove("hidden");
+}
+
 // Double-progression target for a standard (bilateral) exercise: one working
 // weight shared across all sets. Uses the MEDIAN weight from the most recent
 // session with data for this exercise (excluding 0-rep/failed sets), and only
@@ -273,8 +462,12 @@ function median(nums) {
 // in the last session (weight logged, reps=0) surfaces a back-off suggestion
 // but is otherwise excluded from the target math.
 // Returns { weight, reps, e1rm, reason, backoff }
-function computeTarget(ex, history) {
+// `meso` is the result of getMesocycleState() — pass it explicitly so callers
+// share one evaluation per render/save rather than each recomputing it.
+function computeTarget(ex, history, meso) {
+  meso = meso || { inDeload: false };
   const programWeight = ex.weight || 0;
+  const adjustment = getAiAdjustment(ex.name);
 
   let lastRows = null;
   for (const sess of history) {
@@ -285,7 +478,8 @@ function computeTarget(ex, history) {
   }
 
   if (!lastRows) {
-    return { weight: programWeight, reps: ex.repMin, e1rm: calcE1RM(programWeight, ex.repMin), reason: "new", backoff: null };
+    const w = meso.inDeload ? roundToNearest(programWeight * DELOAD_WEIGHT_PCT, 2.5) : programWeight;
+    return { weight: w, reps: ex.repMin, e1rm: calcE1RM(w, ex.repMin), reason: meso.inDeload ? "deload" : "new", backoff: null };
   }
 
   const valid  = lastRows.filter(r => isWorkingSet(r.weight, r.reps));
@@ -300,16 +494,45 @@ function computeTarget(ex, history) {
 
   const medWeight = median(valid.map(r => parseFloat(r.weight)));
   const medReps   = Math.round(median(valid.map(r => parseFloat(r.reps))));
+  const rpeVals   = valid.map(r => parseFloat(r.rpe)).filter(v => !isNaN(v));
+  const medRPE    = rpeVals.length ? median(rpeVals) : null;
   const hitRatio  = valid.filter(r => parseFloat(r.reps) >= ex.repMax).length / valid.length;
   const bump      = LOWER_DAYS.some(d => d === ex._day) ? 10 : 5;
   const backoff   = failed.length ? { weight: roundToNearest(medWeight * (1 - WEIGHT_DROP_PCT), 2.5), reps: ex.repMin } : null;
 
-  if (hitRatio >= 0.75) {
+  // Deload overrides everything else — always ease off regardless of how
+  // last session went.
+  if (meso.inDeload) {
+    const weight = roundToNearest(medWeight * DELOAD_WEIGHT_PCT, 2.5);
+    return { weight, reps: ex.repMin, e1rm: calcE1RM(weight, ex.repMin), reason: "deload", backoff: null };
+  }
+
+  // Autoregulated double progression: last session's actual RPE undershot
+  // the descending target by a full point+ (it felt clearly easier than it
+  // was supposed to) and reps were already near the top of the range —
+  // progress now rather than waiting to grind out one more rep at a time.
+  const midTargetRPE = targetRPEForSet(Math.floor((ex.sets - 1) / 2), ex.sets, false);
+  const undershotEffort = medRPE !== null && medRPE <= midTargetRPE - 1 && medReps >= ex.repMax - 1;
+
+  // An AI-applied "hold" adjustment caps progression at maintain, even if
+  // the numbers alone would say to bump — used when the review flagged this
+  // exercise as needing a session to stabilize before pushing further.
+  const holding = adjustment && adjustment.holdVolume;
+
+  if (!holding && (hitRatio >= 0.75 || undershotEffort)) {
     const weight = medWeight + bump;
     return { weight, reps: ex.repMin, e1rm: calcE1RM(weight, ex.repMin), reason: "progress", backoff };
   }
-  const targetReps = Math.min(medReps + 1, ex.repMax);
-  return { weight: medWeight, reps: targetReps, e1rm: calcE1RM(medWeight, targetReps), reason: "maintain", backoff };
+
+  // Overshot effort: already grinding at/above target RPE despite not
+  // reaching the top of the rep range — hold rather than push reps further
+  // into fatigue that wasn't part of the plan.
+  if (medRPE !== null && medRPE >= 9.5) {
+    return { weight: medWeight, reps: medReps, e1rm: calcE1RM(medWeight, medReps), reason: "hold", backoff };
+  }
+
+  const targetReps = holding ? medReps : Math.min(medReps + 1, ex.repMax);
+  return { weight: medWeight, reps: targetReps, e1rm: calcE1RM(medWeight, targetReps), reason: holding ? "hold" : "maintain", backoff };
 }
 
 // Legacy per-set-index target logic, kept ONLY for unilateral exercises. Their
@@ -396,6 +619,7 @@ let renderedTargets = {}; // { exIdx: { setIdx: {weight, reps} } } — set at re
 let overrideMode = false;      // "Override Today" — edits apply to overrideExercises only
 let overrideExercises = null;  // temp copy of the day's exercise list, used only while overrideMode is on
 let pendingLogDesc = null;     // { date, day, exercises } — parsed "log by description" result awaiting Load
+let pendingDeclinePrompt = null; // { idx, exName, streak, key } — set during renderExercises, consumed right after
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 function todayStr() {
@@ -687,6 +911,10 @@ async function renderExercises() {
   // Reset rendered targets cache for this render pass
   renderedTargets = {};
 
+  const meso = getMesocycleState();
+  applyVolumeRamp(meso);
+  renderMesoBanner(meso);
+
   // Check if first exercise is compound and struggling
   let workoutAlertShown = false;
 
@@ -712,7 +940,8 @@ async function renderExercises() {
 
     // Bilateral exercises share one target across all sets (double progression).
     // Unilateral exercises keep the legacy per-set-index target.
-    const exTarget = ex.unilateral ? null : computeTarget({ ...ex, _day: activeDay }, history);
+    const exTarget = ex.unilateral ? null : computeTarget({ ...ex, _day: activeDay }, history, meso);
+    const aiAdj = getAiAdjustment(ex.name);
 
     // Build per-set targets and analysis
     const setTargets = [];
@@ -728,6 +957,7 @@ async function renderExercises() {
       if (highFatigue && target.reps < upperHalfReps) {
         target = { ...target, reps: upperHalfReps, e1rm: calcE1RM(target.weight, upperHalfReps) };
       }
+      target = { ...target, targetRPE: targetRPEForSet(si, ex.sets, meso.inDeload) };
       const analysis = analyseSetHistory(setHist);
       setTargets.push(target);
       renderedTargets[i][si] = { weight: target.weight, reps: target.reps };
@@ -740,6 +970,16 @@ async function renderExercises() {
 
     if (worstStatus.status === "stagnant") card.classList.add("stagnant");
     if (worstStatus.status === "declining") card.classList.add("declining");
+
+    // Proactively surface a reconsider prompt the FIRST time a decline streak
+    // crosses the threshold — guarded so it doesn't re-nag on every render of
+    // the same streak. Only one queued per render pass; opened after the card
+    // list finishes building.
+    if (worstStatus.status === "declining" && worstStatus.streak >= PERF_LOSS_SESSIONS && !pendingDeclinePrompt) {
+      const promptKey = ex.name + "_" + worstStatus.streak;
+      const prompted = lsGet("il:promptedDeclines", {});
+      if (!prompted[promptKey]) pendingDeclinePrompt = { idx: i, exName: ex.name, streak: worstStatus.streak, key: promptKey };
+    }
 
     const statusLabel = {
       stagnant: `⚠ Stagnant ${worstStatus.streak} sessions — consider technique focus or rep range shift`,
@@ -759,7 +999,7 @@ async function renderExercises() {
       if (ex.unilateral) {
         setsHTML += `<div class="set-row">
           <div class="set-num">S${si+1}</div>
-          <div class="set-target">Target: <span class="target-val">${target.weight}lb × ${target.reps}</span></div>
+          <div class="set-target">Target: <span class="target-val">${target.weight}lb × ${target.reps}</span> <span class="target-rpe">@RPE${target.targetRPE}</span></div>
         </div>
         <div class="set-row unilateral" style="margin-top:3px;margin-bottom:6px">
           <span class="side-label">L</span>
@@ -776,7 +1016,7 @@ async function renderExercises() {
         const e1rmNow = curW && curR ? calcE1RM_RPE(parseFloat(curW), parseFloat(curR), curRpe) : 0;
         setsHTML += `<div class="set-row" style="margin-bottom:6px">
           <div class="set-num">S${si+1}</div>
-          <div class="set-target">→ <span class="target-val">${target.weight}lb × ${target.reps}</span></div>
+          <div class="set-target">→ <span class="target-val">${target.weight}lb × ${target.reps}</span> <span class="target-rpe">@RPE${target.targetRPE}</span></div>
           <input type="number" class="set-w" data-ex="${i}" data-set="${si}" placeholder="lb" value="${curW}" />
           <input type="number" class="set-r" data-ex="${i}" data-set="${si}" placeholder="reps" value="${curR}" />
           <input type="number" class="set-rpe" data-ex="${i}" data-set="${si}" placeholder="RPE" min="1" max="10" step="0.5" value="${curRpe}" title="Rate of Perceived Exertion 1–10" />
@@ -808,6 +1048,8 @@ async function renderExercises() {
       </div>
       ${exTarget && exTarget.backoff ? `<div class="ex-alert backoff">⚠ Set failed (0 reps) last session — suggested back-off: ${exTarget.backoff.weight}lb × ${exTarget.backoff.reps} reps next time</div>` : ""}
       ${highFatigue ? `<div class="ex-alert fatigue">⚡ High ${exGroup.toLowerCase()} fatigue — targeting higher reps</div>` : ""}
+      ${meso.inDeload ? `<div class="ex-alert deload">🔻 Deload week — eased target</div>` : ""}
+      ${!meso.inDeload && aiAdj ? `<div class="ex-alert hold">⏸ AI: holding progression — ${aiAdj.note || "stabilize before pushing further"}</div>` : ""}
       <div class="sets-container">${setsHTML}</div>
       <div class="notes-row">
         <div class="notes-label">Notes</div>
@@ -819,6 +1061,15 @@ async function renderExercises() {
 
   bindExerciseInputs(container, curEx);
   appendAddExerciseBtn(container);
+
+  if (pendingDeclinePrompt) {
+    const prompted = lsGet("il:promptedDeclines", {});
+    prompted[pendingDeclinePrompt.key] = true;
+    lsSet("il:promptedDeclines", prompted);
+    const p = pendingDeclinePrompt;
+    pendingDeclinePrompt = null;
+    openReconsiderModal(p.idx, `Consistently declining e1RM for ${p.streak} sessions in a row — worth reconsidering?`);
+  }
 }
 
 // Add-exercise-from-library button (used on Freeball + any day)
@@ -1120,18 +1371,19 @@ async function saveSession() {
     // before vs. after this session, and feed the result back into the exercise
     // by NAME in the permanent program — even when logged via an override.
     const priorHistory = dayHistory[activeDay] || [];
+    const savedMeso = getMesocycleState();
     const changes=[];
     curEx.forEach((ex,i)=>{
       if (ex.unilateral) return;
       const sets=liveLog[i]?.sets||[];
       const rowsForEx = sets
-        .map((st,si)=> (st && st.weight && st.reps) ? { exercise:ex.name, set:si+1, weight:st.weight, reps:st.reps } : null)
+        .map((st,si)=> (st && st.weight && st.reps) ? { exercise:ex.name, set:si+1, weight:st.weight, reps:st.reps, rpe:st.rpe } : null)
         .filter(Boolean);
       if (!rowsForEx.length) return;
 
-      const beforeTarget = computeTarget({ ...ex, _day:activeDay }, priorHistory);
+      const beforeTarget = computeTarget({ ...ex, _day:activeDay }, priorHistory, savedMeso);
       const afterHistory = [{ date:cleanSessDate, rows:rowsForEx }, ...priorHistory];
-      const afterTarget  = computeTarget({ ...ex, _day:activeDay }, afterHistory);
+      const afterTarget  = computeTarget({ ...ex, _day:activeDay }, afterHistory, savedMeso);
 
       if (afterTarget.e1rm !== beforeTarget.e1rm) {
         changes.push({ name:ex.name, from:beforeTarget.e1rm, to:afterTarget.e1rm, dir: afterTarget.e1rm > beforeTarget.e1rm ? "up" : "dn", metric:"e1RM" });
@@ -1142,6 +1394,11 @@ async function saveSession() {
         const permIdx = permanentList.findIndex(e => e.name === ex.name);
         if (permIdx !== -1) permanentList[permIdx].weight = afterTarget.weight;
       }
+
+      // An AI "hold" only applies to the ONE session it was issued for —
+      // now that it's been honored, clear it so next time progresses normally
+      // (unless the next review decides to hold it again).
+      if (getAiAdjustment(ex.name)) clearAiAdjustment(ex.name);
     });
 
     if (changes.length) {
@@ -1205,16 +1462,40 @@ async function saveSession() {
 
 // ── AI: end-of-session review ────────────────────────────────────────────────
 async function requestSessionReview(sessionKey, day, date) {
-  const box  = document.getElementById("session-review-box");
-  const body = document.getElementById("session-review-body");
+  const box     = document.getElementById("session-review-box");
+  const body    = document.getElementById("session-review-body");
+  const applied = document.getElementById("session-review-applied");
   box.classList.remove("hidden");
   body.classList.add("loading");
   body.textContent = "Reviewing your session...";
+  applied.classList.add("hidden");
+  applied.innerHTML = "";
   try {
     const d = await sheetsCall({ action:"ai_review", sessionKey, day, date });
     body.classList.remove("loading");
-    if (d.ok && d.summary) body.textContent = d.summary;
-    else box.classList.add("hidden");
+    if (!d.ok || !d.summary) { box.classList.add("hidden"); return; }
+    body.textContent = d.summary;
+
+    // Auto-apply what the review recommends, but always show exactly what
+    // changed — "auto-apply, notify me", never a silent change.
+    const appliedLines = [];
+    (d.adjustments || []).forEach(a => {
+      if (!a || !a.exercise) return;
+      setAiAdjustment(a.exercise, { holdVolume: true, note: a.note || "" });
+      appliedLines.push(`⏸ Holding ${a.exercise} — ${a.note || "stabilize before progressing"}`);
+    });
+    if (d.deloadRecommended) {
+      triggerAiDeload(d.deloadReason || "AI-recommended deload based on this session review.");
+      appliedLines.push(`🔻 Deload triggered — ${d.deloadReason || "recommended by session review"}`);
+    }
+    if (appliedLines.length) {
+      applied.innerHTML = appliedLines.map(l => `<span class="sra-item">${l}</span>`).join("");
+      applied.classList.remove("hidden");
+      // The exercise list was already rendered (pre-review) with the OLD
+      // meso/adjustment state — refresh so the banner and targets reflect
+      // what was just auto-applied, without waiting for the next navigation.
+      if (day === activeDay) renderExercises();
+    }
   } catch(e) {
     box.classList.add("hidden");
   }
@@ -1336,10 +1617,10 @@ document.getElementById("swap-cancel-main").addEventListener("click",()=>documen
 document.getElementById("swap-cancel").addEventListener("click",()=>document.getElementById("swap-modal").classList.add("hidden"));
 
 // ── Reconsider Modal (AI) ────────────────────────────────────────────────────
-function openReconsiderModal(idx) {
+function openReconsiderModal(idx, presetReason) {
   const ex = activeExArray()[idx];
   document.getElementById("reconsider-exname").textContent = "Reconsidering: " + ex.name;
-  document.getElementById("reconsider-reason").value = "";
+  document.getElementById("reconsider-reason").value = presetReason || "";
   document.getElementById("reconsider-form").classList.remove("hidden");
   document.getElementById("reconsider-loading").classList.add("hidden");
   document.getElementById("reconsider-result").classList.add("hidden");
