@@ -357,6 +357,15 @@ function triggerAiDeload(reason) {
   lsSet("il:mesocycle", meso);
 }
 
+// Called when the pre-session feeling-check AI decides the user's stated
+// feeling overrides an active deload (scheduled, fatigue-triggered, or
+// AI-recommended). Restarts the mesocycle clock from today rather than just
+// clearing deloadStart — otherwise a scheduled deload past week 6 would
+// re-trigger itself on the very next getMesocycleState() call.
+function cancelDeload() {
+  lsSet("il:mesocycle", { cycleStart: todayStr(), deloadStart: null, deloadReason: null });
+}
+
 // Descending target RPE across an exercise's sets — more reserve on early
 // sets, tightening toward failure on the last one (Schoenfeld's within-
 // session RIR structure), rather than the same effort on every set.
@@ -1707,14 +1716,26 @@ document.getElementById("feeling-submit").addEventListener("click", async () => 
       name: ex.name, sets: ex.sets, repMin: ex.repMin, repMax: ex.repMax,
       weight: ex.weight || 0, group: getMuscleGroup(ex.name)
     }));
+    const meso = getMesocycleState();
     const d = await sheetsCall({
       action: "ai_presession_check", day: activeDay, date: sessDate,
-      feeling, exercises: JSON.stringify(exercisesPayload)
+      feeling, exercises: JSON.stringify(exercisesPayload),
+      inDeload: meso.inDeload ? "true" : "false", deloadReason: meso.reason || ""
     });
     document.getElementById("feeling-loading").classList.add("hidden");
     if (!d.ok || !Array.isArray(d.exercises)) throw new Error(d.msg || "No response");
 
-    document.getElementById("feeling-note-text").textContent = d.note || (d.adjusted ? "Session adjusted." : "No changes needed.");
+    // Applied immediately (not gated behind Accept) — this corrects mesocycle
+    // state, not the program itself, so there's nothing to "accept."
+    if (d.deloadOverride) {
+      cancelDeload();
+      renderExercises();
+      toast("Deload cancelled — resuming normal progression");
+    }
+
+    let noteText = d.note || (d.adjusted ? "Session adjusted." : "No changes needed.");
+    if (d.deloadOverride) noteText += (noteText ? " " : "") + "Deload cancelled: " + (d.deloadOverrideNote || "resuming normal progression.");
+    document.getElementById("feeling-note-text").textContent = noteText;
     const changesBox = document.getElementById("feeling-changes");
     const acceptBtn  = document.getElementById("feeling-accept");
 

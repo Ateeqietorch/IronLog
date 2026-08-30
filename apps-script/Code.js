@@ -218,9 +218,11 @@ function doGet(e) {
     // returns the FULL exercise list back (unchanged entries included) so the
     // client can apply it wholesale.
     if (action === "ai_presession_check") {
-      const day      = e.parameter.day;
-      const date     = e.parameter.date;
-      const feeling  = e.parameter.feeling || "";
+      const day       = e.parameter.day;
+      const date      = e.parameter.date;
+      const feeling   = e.parameter.feeling || "";
+      const inDeload  = e.parameter.inDeload === "true";
+      const deloadReason = e.parameter.deloadReason || "";
       let exercises;
       try { exercises = JSON.parse(e.parameter.exercises); } catch (err) { exercises = []; }
       if (!exercises.length) return respond({ ok: false, msg: "no exercises to check" });
@@ -237,9 +239,17 @@ function doGet(e) {
         "exercises (e.g. fatigue, soreness, low sleep), substitute an exercise (e.g. to avoid a sore joint), or " +
         "make no changes if the note doesn't warrant it — most notes should NOT change a well-designed session. " +
         "Keep \"note\" to ONE short sentence — do not explain your reasoning per exercise, just state the object. " +
+        (inDeload ?
+          "The app currently has this user in a deload week (reason: " + (deloadReason || "unspecified") + "). " +
+          "If — and only if — the user's stated feeling clearly indicates they feel strong/recovered/ready and " +
+          "explicitly don't want the deload (not just a neutral or ambiguous note), set deload_override to true " +
+          "so the app cancels it and resumes normal progression. Default to leaving the deload in place; only " +
+          "override on a clear, explicit signal from the user. " :
+          "The user is not currently in a deload, so deload_override should always be false. ") +
         "Respond with ONLY a single valid JSON object and NOTHING else — no preamble, no explanation, no markdown fences, no closing remarks. Your entire response must start with { and end with }, matching exactly this shape: " +
         '{"adjusted": boolean, "exercises": [{"name": string, "sets": number, "repMin": number, "repMax": number, ' +
-        '"weight": number, "substituted_from": string|null}], "note": string}. ' +
+        '"weight": number, "substituted_from": string|null}], "note": string, "deload_override": boolean, ' +
+        '"deload_override_note": string|null}. ' +
         "The exercises array MUST contain every exercise from the planned session, in the same order, whether " +
         "changed or not — set substituted_from to null for anything not substituted.";
 
@@ -252,7 +262,11 @@ function doGet(e) {
       if (!parsed || !Array.isArray(parsed.exercises)) {
         return respond({ ok: false, msg: "Could not parse AI response. Raw: " + String(raw).slice(0, 500) });
       }
-      return respond({ ok: true, adjusted: !!parsed.adjusted, exercises: parsed.exercises, note: parsed.note || "" });
+      return respond({
+        ok: true, adjusted: !!parsed.adjusted, exercises: parsed.exercises, note: parsed.note || "",
+        deloadOverride: inDeload && !!parsed.deload_override,
+        deloadOverrideNote: parsed.deload_override_note || ""
+      });
     }
 
     // ── AI: log a completed session from a free-text description ──────────────
