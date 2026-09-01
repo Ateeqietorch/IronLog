@@ -788,8 +788,51 @@ function toast(msg) {
   toastTimer = setTimeout(() => el.classList.add("hidden"), 3000);
 }
 
+// ── Local session snapshot ───────────────────────────────────────────────────
+// The remote draft below needs a round trip to Apps Script on EVERY input and
+// fails completely silently (`catch {}`) — a bad connection mid-session means
+// nothing gets saved server-side, but there's no error, no indicator, nothing.
+// This mirrors the same in-progress log to localStorage on every input too,
+// synchronously and with zero network dependency, so a crash/reload always has
+// something to recover from even if the remote save was failing the whole time.
+function hasLoggedData(log) {
+  return Object.values(log||{}).some(l => (l?.sets||[]).some(st => st && (st.weight || st.reps || st.weightL || st.weightR)));
+}
+function saveLocalSession() {
+  if (!hasLoggedData(liveLog)) { lsSet("il:liveSession", null); return; }
+  lsSet("il:liveSession", { day:activeDay, date:sessDate, liveLog, liveNote });
+}
+function clearLocalSession() { lsSet("il:liveSession", null); }
+
+// Checked first on load, before the remote draft — instant and works even if
+// the connection is down. Returns true if it showed a banner (skip the
+// remote check in that case; local is always at least as fresh).
+function checkForLocalSession() {
+  const local = lsGet("il:liveSession", null);
+  if (!local || !hasLoggedData(local.liveLog)) { clearLocalSession(); return false; }
+  const dayLabel = local.day===FREEBALL_DAY ? "Freeball" : (local.day.split("—")[1]?.trim() || local.day);
+  const banner = document.getElementById("draft-banner");
+  document.getElementById("draft-banner-text").textContent =
+    `Unfinished ${dayLabel} from ${local.date} (recovered locally) — continue?`;
+  banner.classList.remove("hidden");
+  document.getElementById("draft-continue").onclick = () => {
+    activeDay = local.day; sessDate = local.date;
+    document.getElementById("session-date").value = local.date;
+    liveLog = local.liveLog || {}; liveNote = local.liveNote || {}; struggleSetAdded = {};
+    renderDayButtons(); renderExercises(); renderLastSession();
+    banner.classList.add("hidden"); toast("Local session restored");
+  };
+  document.getElementById("draft-discard").onclick = async () => {
+    clearLocalSession();
+    try { await sheetsCall({ action:"clear_draft", draftKey:`DRAFT_${local.date}_${local.day}` }); } catch {}
+    banner.classList.add("hidden");
+  };
+  return true;
+}
+
 // ── Draft ─────────────────────────────────────────────────────────────────────
 async function saveDraft() {
+  saveLocalSession();
   const curEx = activeExArray()||[];
   const dk = `DRAFT_${sessDate}_${activeDay}`;
   const rows = [];
@@ -850,6 +893,7 @@ function mergeSetsIntoLiveLog(entries) {
     if (entry.notes) liveNote[exIdx] = entry.notes;
   });
   persistExercises();
+  saveLocalSession(); // protect the just-restored data against another crash before the first edit
 }
 
 function applyDraftToLiveLog(draft) {
@@ -882,21 +926,40 @@ function showDraftBanner(draft, key) {
 }
 
 // ── Recover a draft manually ─────────────────────────────────────────────────
-// For when the localStorage draftKey pointer itself is gone or stale (e.g. an
-// older draft from before override-state persistence existed) — searches the
-// Drafts sheet directly for whatever day/date is currently selected.
+// For when the automatic checks on load didn't catch it. Tries the local
+// snapshot first (instant, no network needed, always at least as fresh as
+// anything remote) — activeDay resets to the default tab on every app
+// reload, so if the crash happened on Freeball or any non-Day-1 tab, the
+// remote search below would otherwise silently look under the wrong day.
+// Falls back to the Drafts sheet, and if nothing matches the CURRENT
+// day/date, offers the most recent draft of ANY day rather than a flat
+// "not found" — better than making the user guess which tab they were on.
 async function recoverDraft() {
+  const local = lsGet("il:liveSession", null);
+  if (local && hasLoggedData(local.liveLog)) {
+    activeDay = local.day; sessDate = local.date;
+    document.getElementById("session-date").value = local.date;
+    liveLog = local.liveLog || {}; liveNote = local.liveNote || {}; struggleSetAdded = {};
+    renderDayButtons(); await renderExercises(); renderLastSession();
+    toast(`Recovered local session from ${local.date}`);
+    return;
+  }
+
   const dateStr = sessDate.slice(0,10);
-  const dayLabel = activeDay===FREEBALL_DAY ? "Freeball" : (activeDay.split("—")[1]?.trim() || activeDay);
   toast("Checking for a saved draft...");
   try {
     const d = await sheetsCall({ action:"read_draft" });
     const drafts = parseDraftRows(d.rows);
-    const match = Object.values(drafts).find(draft => draft.date === dateStr && draft.day === activeDay);
-    if (!match) { toast(`No saved draft found for ${dayLabel} on ${dateStr}`); return; }
+    const all = Object.values(drafts);
+    if (!all.length) { toast("No saved drafts found on the server"); return; }
+    let match = all.find(draft => draft.date === dateStr && draft.day === activeDay);
+    if (!match) match = [...all].sort((a,b) => b.date.localeCompare(a.date))[0];
+    activeDay = match.day; sessDate = match.date;
+    document.getElementById("session-date").value = match.date;
     applyDraftToLiveLog(match);
     renderDayButtons(); renderExercises(); renderLastSession();
-    toast(`Recovered draft from ${dateStr}`);
+    const lbl = match.day===FREEBALL_DAY ? "Freeball" : (match.day.split("—")[1]?.trim() || match.day);
+    toast(`Recovered draft: ${lbl} from ${match.date}`);
   } catch(e) {
     toast("Couldn't check drafts: " + e.message);
   }
@@ -1449,6 +1512,7 @@ async function saveSession() {
     sessions=parseSessionRows((await sheetsCall({action:"read"})).rows);
     setSyncStatus("synced");
     liveLog={}; liveNote={}; struggleSetAdded={};
+    clearLocalSession(); // session is saved for real now — the local safety net is no longer needed
     document.getElementById("workout-alert").classList.add("hidden");
 
     // Override session: offer to promote it to a permanent day before resetting.
@@ -1783,6 +1847,7 @@ document.getElementById("feeling-submit").addEventListener("click", async () => 
         });
         persistExercises();
         liveLog = {}; liveNote = {}; struggleSetAdded = {};
+        clearLocalSession(); // plan just changed — any prior local snapshot is for the old plan
         document.getElementById("feeling-modal").classList.add("hidden");
         renderDayButtons(); renderExercises(); renderLastSession();
         toast("Session adjusted for today");
@@ -2241,7 +2306,7 @@ async function init() {
     toast("Could not connect to Google Sheets");
   }
 
-  await checkForDraft();
+  if (!checkForLocalSession()) await checkForDraft();
   renderDayButtons();
   await renderExercises();
   renderLastSession();
