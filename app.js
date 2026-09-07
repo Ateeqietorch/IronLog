@@ -610,12 +610,50 @@ function computeTarget(ex, history, meso) {
   // Some sets failed outright (0 reps) even though others were valid — treat
   // as a full miss for backoff severity, same as the all-failed branch above.
   const backoff   = failed.length ? { weight: roundToNearest(medWeight * (1 - computeBackoffPct(0, ex.repMin, medRPE)), 2.5), reps: ex.repMin } : null;
+  // An AI-applied "hold" adjustment caps progression at maintain, even if
+  // the numbers alone would say to bump — used when the review flagged this
+  // exercise as needing a session to stabilize before pushing further.
+  const holding = adjustment && adjustment.holdVolume;
 
   // Deload overrides everything else — always ease off regardless of how
   // last session went.
   if (meso.inDeload) {
     const weight = roundToNearest(medWeight * DELOAD_WEIGHT_PCT, 2.5);
     return { weight, reps: ex.repMin, e1rm: calcE1RM(weight, ex.repMin), reason: "deload", backoff: null };
+  }
+
+  // ── EXPERIMENTAL: ladder set for coarse-increment (dumbbell) exercises ──
+  // NOT YET SHIPPED — see the write-up alongside this commit for real
+  // design tensions before this goes live.
+  //
+  // Rather than jumping every set to the next dumbbell size at once, test
+  // it with ONE set first: set 1 goes to the next weight at repMin reps
+  // while the rest hold at the already-proven weight/reps. Detected purely
+  // by comparing set 1's weight to the median of the rest in the last
+  // session's actual logged data — no separate stored state, so it stays
+  // consistent with this app treating the Sheet as the only source of
+  // truth (no shadow "am I mid-ladder-test" flag anywhere else).
+  const isDB = isDumbbellExercise(ex.name);
+  if (isDB && !holding && valid.length > 1) {
+    const firstWeight = parseFloat(valid[0].weight);
+    const restRows    = valid.slice(1);
+    const restMedian  = median(restRows.map(r => parseFloat(r.weight)));
+    const wasLadderAttempt = firstWeight > restMedian + 0.01;
+    if (wasLadderAttempt) {
+      const ladderReps = parseFloat(valid[0].reps);
+      if (ladderReps >= ex.repMin) {
+        // Ladder set succeeded — promote ALL sets to the validated weight.
+        return { weight: firstWeight, reps: ex.repMin, e1rm: calcE1RM(firstWeight, ex.repMin), reason: "progress", backoff };
+      }
+      // Ladder set missed — hold at the proven weight/reps and offer the
+      // SAME ladder test again rather than escalating further on a miss.
+      const restReps = Math.round(median(restRows.map(r => parseFloat(r.reps))));
+      return {
+        weight: restMedian, reps: Math.min(restReps + 1, repCeiling),
+        e1rm: calcE1RM(restMedian, restReps), reason: "hold", backoff,
+        ladderOverride: { weight: firstWeight, reps: ex.repMin, e1rm: calcE1RM(firstWeight, ex.repMin) }
+      };
+    }
   }
 
   // Autoregulated double progression: last session's actual RPE undershot
@@ -625,12 +663,18 @@ function computeTarget(ex, history, meso) {
   const midTargetRPE = targetRPEForSet(Math.floor((ex.sets - 1) / 2), ex.sets, false);
   const undershotEffort = medRPE !== null && medRPE <= midTargetRPE - 1 && medReps >= repCeiling - 1;
 
-  // An AI-applied "hold" adjustment caps progression at maintain, even if
-  // the numbers alone would say to bump — used when the review flagged this
-  // exercise as needing a session to stabilize before pushing further.
-  const holding = adjustment && adjustment.holdVolume;
-
   if (!holding && (hitRatio >= 0.75 || undershotEffort)) {
+    if (isDB) {
+      // First time hitting the rep ceiling on a dumbbell exercise — offer a
+      // ladder test on set 1 instead of jumping every set at once. The
+      // OTHER sets hold at their already-earned reps (repCeiling), NOT a
+      // reset to repMin — only the ladder set itself uses the new weight.
+      const nextW = computeNextWeight(medWeight, ex.name);
+      return {
+        weight: medWeight, reps: repCeiling, e1rm: calcE1RM(medWeight, repCeiling), reason: "hold", backoff,
+        ladderOverride: { weight: nextW, reps: ex.repMin, e1rm: calcE1RM(nextW, ex.repMin) }
+      };
+    }
     const weight = computeNextWeight(medWeight, ex.name);
     return { weight, reps: ex.repMin, e1rm: calcE1RM(weight, ex.repMin), reason: "progress", backoff };
   }
@@ -946,6 +990,14 @@ function computeRestSeconds(ex, rpe) {
   }
   return Math.max(45, Math.round(base / 5) * 5);
 }
+// EXPERIMENTAL ladder set (not yet shipped): the rest calc above classifies
+// by ex.repMax, which describes the exercise's NORMAL sets — a ladder set is
+// heavier and lower-rep than that, so it needs its own classification (using
+// repMin as the effective repMax) rather than being timed like a normal
+// light-isolation set it no longer resembles.
+function restClassificationFor(i, si, ex) {
+  return renderedTargets[i]?.[si]?.isLadder ? { ...ex, repMax: ex.repMin } : ex;
+}
 let restTimerInterval = null;
 let restTimerEndsAt = null;
 
@@ -1233,13 +1285,21 @@ async function renderExercises() {
             sets: (h.rows||[]).filter(r => r.exercise === ex.name).map(r => ({ weight:r.weight, reps:r.reps }))
           })))
         : exTarget;
-      if (highFatigue && target.reps < upperHalfReps) {
+      // EXPERIMENTAL ladder set (not yet shipped) — set 1 only, testing the
+      // next dumbbell size at a lower rep count. Deliberately does NOT use
+      // the ascending RPE schedule below (which assumes constant weight
+      // across sets and reserves its lowest value for set 1) — a heavier
+      // test set targets a fixed, higher RPE instead.
+      if (si === 0 && !ex.unilateral && exTarget?.ladderOverride) {
+        target = { ...exTarget.ladderOverride, isLadder: true };
+      }
+      if (highFatigue && !target.isLadder && target.reps < upperHalfReps) {
         target = { ...target, reps: upperHalfReps, e1rm: calcE1RM(target.weight, upperHalfReps) };
       }
-      target = { ...target, targetRPE: targetRPEForSet(si, ex.sets, meso.inDeload) };
+      target = { ...target, targetRPE: target.isLadder ? 8.5 : targetRPEForSet(si, ex.sets, meso.inDeload) };
       const analysis = analyseSetHistory(setHist);
       setTargets.push(target);
-      renderedTargets[i][si] = { weight: target.weight, reps: target.reps, targetRPE: target.targetRPE };
+      renderedTargets[i][si] = { weight: target.weight, reps: target.reps, targetRPE: target.targetRPE, isLadder: !!target.isLadder };
       setStatuses.push(analysis);
     }
 
@@ -1293,8 +1353,8 @@ async function renderExercises() {
         const curR = cur?.reps || "";
         const curRpe = cur?.rpe || "";
         const e1rmNow = curW && curR ? calcE1RM_RPE(parseFloat(curW), parseFloat(curR), curRpe) : 0;
-        setsHTML += `<div class="set-row" style="margin-bottom:6px">
-          <div class="set-num">S${si+1}</div>
+        setsHTML += `<div class="set-row${target.isLadder ? " ladder" : ""}" style="margin-bottom:6px">
+          <div class="set-num">S${si+1}${target.isLadder ? ' <span class="ladder-badge" title="Testing the next dumbbell size — the rest of your sets stay at the current weight">🪜</span>' : ""}</div>
           <div class="set-target">→ <span class="target-val">${target.weight}lb × ${target.reps}</span> <span class="target-rpe">@RPE${target.targetRPE}</span></div>
           <input type="number" class="set-w" data-ex="${i}" data-set="${si}" placeholder="lb" value="${curW}" />
           <input type="number" class="set-r" data-ex="${i}" data-set="${si}" placeholder="reps" value="${curR}" />
@@ -1379,6 +1439,17 @@ function checkFirstSetStruggle(exIdx, setIdx) {
   if (!ex || ex.unilateral) return;
   const st = liveLog[exIdx]?.sets?.[0];
   const card = document.querySelector(`.exercise-card[data-idx="${exIdx}"]`);
+
+  // EXPERIMENTAL ladder set (not yet shipped): set 1 is deliberately a
+  // heavier, lower-rep TEST of the next dumbbell size — coming up short is
+  // an expected, informative outcome for computeTarget to read next
+  // session, not a sign the proven base weight needs a backoff. Without
+  // this guard, a missed ladder attempt would incorrectly suggest cutting
+  // the already-proven working weight.
+  if (renderedTargets[exIdx]?.[0]?.isLadder) {
+    if (card) card.querySelector(".ex-alert.struggle")?.remove();
+    return;
+  }
 
   if (!st?.reps) {
     if (card) card.querySelector(".ex-alert.struggle")?.remove();
@@ -1482,20 +1553,20 @@ function bindExerciseInputs(container, curEx) {
   // the initial estimate rather than being ignored.
   container.querySelectorAll(".set-r").forEach(inp => {
     inp.addEventListener("blur", e => {
-      const i=parseInt(e.target.dataset.ex);
-      const st = liveLog[i]?.sets?.[parseInt(e.target.dataset.set)];
-      if (st?.weight && st?.reps && curEx[i]) startRestTimer(computeRestSeconds(curEx[i], st.rpe));
+      const i=parseInt(e.target.dataset.ex), si=parseInt(e.target.dataset.set);
+      const st = liveLog[i]?.sets?.[si];
+      if (st?.weight && st?.reps && curEx[i]) startRestTimer(computeRestSeconds(restClassificationFor(i, si, curEx[i]), st.rpe));
     });
   });
   container.querySelectorAll(".set-rpe").forEach(inp => {
     inp.addEventListener("blur", e => {
-      const i=parseInt(e.target.dataset.ex);
-      const st = liveLog[i]?.sets?.[parseInt(e.target.dataset.set)];
+      const i=parseInt(e.target.dataset.ex), si=parseInt(e.target.dataset.set);
+      const st = liveLog[i]?.sets?.[si];
       // Only restart an already-running timer for THIS set — don't start one
       // from an isolated RPE entry with no weight/reps, and don't clobber a
       // timer from a different exercise/set that's already counting down.
       if (st?.weight && st?.reps && st?.rpe && curEx[i] && restTimerInterval) {
-        startRestTimer(computeRestSeconds(curEx[i], st.rpe));
+        startRestTimer(computeRestSeconds(restClassificationFor(i, si, curEx[i]), st.rpe));
       }
     });
   });
@@ -1544,7 +1615,7 @@ function bindExerciseInputs(container, curEx) {
         // session's planned target RPE as the best available estimate; the
         // .set-rpe blur handler above will restart with the real number if
         // the user fills one in afterward.
-        if (curEx[i]) startRestTimer(computeRestSeconds(curEx[i], liveLog[i].sets[si].rpe || target.targetRPE));
+        if (curEx[i]) startRestTimer(computeRestSeconds(restClassificationFor(i, si, curEx[i]), liveLog[i].sets[si].rpe || target.targetRPE));
       } else {
         liveLog[i].sets[si].hit = false;
         btn.classList.remove("hit");

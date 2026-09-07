@@ -125,7 +125,9 @@ input::placeholder { color:var(--text4); }
 /* SET ROWS */
 .sets-container { margin-bottom:8px; }
 .set-row { display:flex; gap:5px; align-items:center; margin-bottom:5px; flex-wrap:wrap; }
+.set-row.ladder { background:#1a1508; border-radius:4px; padding:4px 4px 4px 0; }
 .set-num { font-size:9px; color:var(--text4); min-width:18px; flex-shrink:0; }
+.ladder-badge { font-size:10px; }
 .set-target { font-size:9px; color:var(--text3); white-space:nowrap; flex-shrink:0; background:var(--bg3); border:1px solid var(--border2); padding:4px 6px; border-radius:2px; }
 .set-target .target-val { color:var(--gold); }
 .set-target .target-rpe { color:var(--text3); font-size:8px; }
