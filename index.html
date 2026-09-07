@@ -65,6 +65,7 @@
         <button id="feeling-check-btn" class="btn-feeling-check">💬 How are you feeling today?</button>
         <button id="recover-draft-btn" class="btn-feeling-check">🔍 Check for a saved draft</button>
         <button id="logdesc-open-btn" class="btn-feeling-check">📝 Log a past session by description</button>
+        <button id="redesign-open-btn" class="btn-feeling-check">🛠 Redesign this day</button>
         <div id="last-session-box" class="last-session hidden">
           <div id="last-session-title" class="last-session-title"></div>
           <pre id="last-session-body" class="last-session-body"></pre>
@@ -278,6 +279,29 @@
         </div>
       </div>
       <div id="logdesc-error" class="hidden reconsider-error"></div>
+    </div>
+  </div>
+
+  <!-- REDESIGN DAY MODAL (AI, conversational — proposal only, nothing applies until Approve) -->
+  <div id="redesign-modal" class="modal-overlay hidden">
+    <div class="modal modal-tall">
+      <div class="modal-header">
+        <div class="modal-title">REDESIGN THIS DAY</div>
+        <button id="redesign-close" class="btn-icon-close">✕</button>
+      </div>
+      <div class="modal-sub">Talk it through, then approve or reject — nothing changes until you say so.</div>
+      <div id="redesign-chat" class="redesign-chat"></div>
+      <div id="redesign-proposal" class="redesign-proposal"></div>
+      <div id="redesign-loading" class="hidden reconsider-loading">Thinking...</div>
+      <div id="redesign-error" class="hidden reconsider-error"></div>
+      <div class="redesign-input-row">
+        <input type="text" id="redesign-input" placeholder="Ask a question or give direction..." />
+        <button id="redesign-send" class="btn-sm-gold">Send</button>
+      </div>
+      <div class="modal-buttons" style="margin-top:10px">
+        <button id="redesign-approve" class="btn-primary hidden" style="flex:1">✅ Approve — apply this</button>
+        <button id="redesign-reject" class="btn-ghost">❌ Reject</button>
+      </div>
     </div>
   </div>
 

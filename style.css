@@ -72,6 +72,9 @@ input::placeholder { color:var(--text4); }
 .day-btn.active { color:var(--gold); border-color:var(--gold); background:#1a1510; }
 .day-btn.freeball { color:var(--green); border-color:#2a3a2a; border-style:dashed; }
 .day-btn.freeball.active { color:var(--green); border-color:var(--green); background:#0f1a0f; border-style:solid; }
+.day-btn-group { display:inline-flex; align-items:center; gap:2px; }
+.day-rename-btn { background:none; border:none; color:var(--text3); opacity:.5; cursor:pointer; font-size:11px; padding:4px 2px; line-height:1; }
+.day-rename-btn:hover { opacity:1; }
 .override-row { display:flex; flex-direction:column; gap:4px; margin-bottom:12px; }
 .override-toggle { display:flex; align-items:center; gap:7px; font-size:10px; color:var(--text3); letter-spacing:.08em; text-transform:uppercase; cursor:pointer; }
 .override-toggle input { accent-color:var(--gold); width:14px; height:14px; cursor:pointer; }
@@ -310,6 +313,19 @@ input::placeholder { color:var(--text4); }
 .feeling-changes { margin:10px 0 14px; display:flex; flex-direction:column; gap:6px; }
 .feeling-change-row { font-size:11px; color:var(--text2); background:var(--bg3); border:1px solid var(--border2); border-radius:3px; padding:7px 9px; }
 .feeling-change-row .fc-name { color:var(--gold); }
+
+/* REDESIGN DAY (conversational) */
+.redesign-chat { flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch; display:flex; flex-direction:column; gap:8px; margin-bottom:10px; min-height:60px; }
+.redesign-msg { font-size:11px; line-height:1.5; padding:8px 10px; border-radius:6px; max-width:88%; }
+.redesign-msg.user { align-self:flex-end; background:#1a1510; border:1px solid #3a3018; color:var(--text); }
+.redesign-msg.assistant { align-self:flex-start; background:var(--bg3); border:1px solid var(--border2); color:var(--text2); }
+.redesign-proposal { background:var(--bg3); border:1px solid var(--border2); border-radius:4px; padding:4px 10px; margin-bottom:10px; max-height:180px; overflow-y:auto; }
+.redesign-proposal-row { font-size:11px; color:var(--text2); padding:5px 0; border-bottom:1px solid var(--border); }
+.redesign-proposal-row:last-child { border-bottom:none; }
+.redesign-proposal-row .rp-name { color:var(--gold); }
+.redesign-input-row { display:flex; gap:6px; }
+.redesign-input-row input { flex:1; background:var(--bg3); border:1px solid var(--border2); color:var(--text); font-family:var(--font-mono); font-size:12px; padding:8px; border-radius:3px; outline:none; }
+.redesign-input-row input:focus { border-color:var(--gold); }
 .feeling-change-row .fc-sub { color:var(--green); font-size:9px; display:block; margin-top:2px; }
 
 /* TOAST */

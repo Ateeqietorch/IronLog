@@ -187,6 +187,25 @@ function allProgramDays(){ return [...DAYS, ...customDays]; }
 // All selectable days = program days + the freeball day (freeball never lives in DEFAULTS)
 function allDays(){ return [...allProgramDays(), FREEBALL_DAY]; }
 
+// User-chosen display names for a day, e.g. "Day 2 — Pull" -> "Back & Biceps".
+// A day's INTERNAL name (the DEFAULTS/customDays key) never changes — it's how
+// every historical session row, draft, and volume calc identifies that day, so
+// renaming it would orphan all past data under the old string. This is purely
+// a display-layer override, looked up wherever a day name is shown.
+let dayLabels = lsGet("il:dayLabels", {});
+function getDayLabel(day) {
+  if (day === FREEBALL_DAY) return "Freeball";
+  return dayLabels[day] || day.split("—")[1]?.trim() || day;
+}
+function renameDay(day) {
+  const current = getDayLabel(day);
+  const next = (prompt(`Rename "${current}" to:`, current) || "").trim();
+  if (!next || next === current) return;
+  dayLabels[day] = next;
+  lsSet("il:dayLabels", dayLabels);
+  renderDayButtons(); renderExercises(); renderLastSession();
+}
+
 // ── Science Functions ─────────────────────────────────────────────────────────
 
 // Epley formula: e1RM = weight × (1 + reps/30)
@@ -810,7 +829,7 @@ function clearLocalSession() { lsSet("il:liveSession", null); }
 function checkForLocalSession() {
   const local = lsGet("il:liveSession", null);
   if (!local || !hasLoggedData(local.liveLog)) { clearLocalSession(); return false; }
-  const dayLabel = local.day===FREEBALL_DAY ? "Freeball" : (local.day.split("—")[1]?.trim() || local.day);
+  const dayLabel = getDayLabel(local.day);
   const banner = document.getElementById("draft-banner");
   document.getElementById("draft-banner-text").textContent =
     `Unfinished ${dayLabel} from ${local.date} (recovered locally) — continue?`;
@@ -909,7 +928,7 @@ function applyDraftToLiveLog(draft) {
 function showDraftBanner(draft, key) {
   const banner = document.getElementById("draft-banner");
   document.getElementById("draft-banner-text").textContent =
-    `Unfinished ${draft.day.split("—")[1]?.trim()} from ${draft.date} — continue?`;
+    `Unfinished ${getDayLabel(draft.day)} from ${draft.date} — continue?`;
   banner.classList.remove("hidden");
   document.getElementById("draft-continue").onclick = () => {
     activeDay = draft.day; sessDate = draft.date;
@@ -958,8 +977,7 @@ async function recoverDraft() {
     document.getElementById("session-date").value = match.date;
     applyDraftToLiveLog(match);
     renderDayButtons(); renderExercises(); renderLastSession();
-    const lbl = match.day===FREEBALL_DAY ? "Freeball" : (match.day.split("—")[1]?.trim() || match.day);
-    toast(`Recovered draft: ${lbl} from ${match.date}`);
+    toast(`Recovered draft: ${getDayLabel(match.day)} from ${match.date}`);
   } catch(e) {
     toast("Couldn't check drafts: " + e.message);
   }
@@ -1384,13 +1402,13 @@ function renderLastSession() {
   const box=document.getElementById("last-session-box"), none=document.getElementById("no-last-session");
   if (prev) {
     box.classList.remove("hidden"); none.classList.add("hidden");
-    const lbl = activeDay===FREEBALL_DAY ? "FREEBALL" : activeDay.split("—")[1]?.trim().toUpperCase();
+    const lbl = activeDay===FREEBALL_DAY ? "FREEBALL" : getDayLabel(activeDay).toUpperCase();
     document.getElementById("last-session-title").textContent =
       `LAST ${lbl} — ${prev.date}`;
     document.getElementById("last-session-body").textContent = formatSession(prev);
   } else {
     box.classList.add("hidden"); none.classList.remove("hidden");
-    const lbl = activeDay===FREEBALL_DAY ? "freeball" : activeDay.split("—")[1]?.trim();
+    const lbl = activeDay===FREEBALL_DAY ? "freeball" : getDayLabel(activeDay);
     none.textContent = `No previous ${lbl} session on record.`;
   }
 }
@@ -1400,10 +1418,12 @@ function renderDayButtons() {
   const container = document.getElementById("day-buttons");
   container.innerHTML = "";
   allDays().forEach(d => {
-    const btn=document.createElement("button");
     const isFree = d===FREEBALL_DAY;
+    const group = document.createElement("div");
+    group.className = "day-btn-group";
+    const btn=document.createElement("button");
     btn.className="day-btn"+(d===activeDay?" active":"")+(isFree?" freeball":"");
-    btn.textContent= isFree ? "＋ Freeball" : (d.split("—")[1]?.trim() || d);
+    btn.textContent= isFree ? "＋ Freeball" : getDayLabel(d);
     btn.addEventListener("click",()=>{
       activeDay=d; liveLog={}; liveNote={}; struggleSetAdded={};
       overrideMode=false; overrideExercises=null;
@@ -1415,7 +1435,16 @@ function renderDayButtons() {
       document.getElementById("session-review-box").classList.add("hidden");
       renderDayButtons(); renderExercises(); renderLastSession();
     });
-    container.appendChild(btn);
+    group.appendChild(btn);
+    if (!isFree) {
+      const renameBtn = document.createElement("button");
+      renameBtn.className = "day-rename-btn";
+      renameBtn.textContent = "✎";
+      renameBtn.title = "Rename this day";
+      renameBtn.addEventListener("click", (e) => { e.stopPropagation(); renameDay(d); });
+      group.appendChild(renameBtn);
+    }
+    container.appendChild(group);
   });
   const overrideRow = document.getElementById("override-row");
   if (overrideRow) overrideRow.classList.toggle("hidden", activeDay===FREEBALL_DAY);
@@ -1652,7 +1681,7 @@ function renderLibList(){
     item.addEventListener("click",()=>{
       activeExArray().push({ name:ex.name, sets:3, reps:`${ex.repMin}–${ex.repMax}`, repMin:ex.repMin, repMax:ex.repMax, weight:ex.weight||null, unilateral:!!ex.unilateral });
       persistExercises();
-      toast(`${ex.name} added to ${activeDay===FREEBALL_DAY?"Freeball":activeDay.split("—")[1]?.trim()||activeDay}${overrideMode?" (override)":""}`);
+      toast(`${ex.name} added to ${getDayLabel(activeDay)}${overrideMode?" (override)":""}`);
     });
     list.appendChild(item);
   });
@@ -1944,6 +1973,105 @@ document.getElementById("logdesc-load").addEventListener("click", () => {
   renderDayButtons(); renderExercises(); renderLastSession();
   toast(`Loaded ${pendingLogDesc.date} — review and Save Session when ready`);
   pendingLogDesc = null;
+});
+
+// ── Redesign This Day (AI, conversational) ───────────────────────────────────
+// A PERMANENT program change (unlike the feeling-check's today-only tweaks),
+// so unlike the rest of the AI features this one never auto-applies — it's a
+// real back-and-forth (the client resends the full transcript each turn so
+// Claude sees proper conversation history, not just a rolling summary), and
+// the only way anything reaches the program is the explicit Approve button.
+let redesignDay = null;
+let redesignTranscript = [];
+let redesignProposal = null;
+
+function appendRedesignBubble(role, text) {
+  const chat = document.getElementById("redesign-chat");
+  const bubble = document.createElement("div");
+  bubble.className = `redesign-msg ${role}`;
+  bubble.textContent = text;
+  chat.appendChild(bubble);
+  chat.scrollTop = chat.scrollHeight;
+}
+
+function renderRedesignProposal(list) {
+  const box = document.getElementById("redesign-proposal");
+  box.innerHTML = list.map(ex => `
+    <div class="redesign-proposal-row">
+      <span class="rp-name">${ex.name}</span> — ${ex.sets} sets × ${ex.repMin}–${ex.repMax} @ ${ex.weight ? ex.weight+"lb" : "BW"}
+    </div>`).join("");
+}
+
+async function sendRedesignTurn(userText, hideUserBubble) {
+  if (!hideUserBubble) appendRedesignBubble("user", userText);
+  redesignTranscript.push({ role:"user", content:userText });
+  document.getElementById("redesign-loading").classList.remove("hidden");
+  document.getElementById("redesign-error").classList.add("hidden");
+  document.getElementById("redesign-send").disabled = true;
+  try {
+    const curEx = (exercises[redesignDay]||[]).map(ex => ({
+      name:ex.name, sets:ex.sets, repMin:ex.repMin, repMax:ex.repMax, weight:ex.weight||0, unilateral:!!ex.unilateral
+    }));
+    const d = await sheetsCall({
+      action: "ai_redesign_day", day: redesignDay,
+      exercises: JSON.stringify(curEx), transcript: JSON.stringify(redesignTranscript)
+    });
+    document.getElementById("redesign-loading").classList.add("hidden");
+    if (!d.ok || !Array.isArray(d.exercises)) throw new Error(d.msg || "No response");
+    redesignTranscript.push({ role:"assistant", content: JSON.stringify({ message:d.message, exercises:d.exercises }) });
+    redesignProposal = d.exercises;
+    appendRedesignBubble("assistant", d.message || "Here's the redesign.");
+    renderRedesignProposal(d.exercises);
+    document.getElementById("redesign-approve").classList.remove("hidden");
+  } catch(e) {
+    document.getElementById("redesign-loading").classList.add("hidden");
+    document.getElementById("redesign-error").textContent = "Couldn't reach the AI: " + e.message;
+    document.getElementById("redesign-error").classList.remove("hidden");
+  }
+  document.getElementById("redesign-send").disabled = false;
+}
+
+function openRedesignModal() {
+  if (activeDay === FREEBALL_DAY) { toast("Freeball is already build-it-yourself — redesign applies to a standing program day"); return; }
+  redesignDay = activeDay;
+  redesignTranscript = [];
+  redesignProposal = null;
+  document.getElementById("redesign-chat").innerHTML = "";
+  document.getElementById("redesign-proposal").innerHTML = "";
+  document.getElementById("redesign-input").value = "";
+  document.getElementById("redesign-error").classList.add("hidden");
+  document.getElementById("redesign-approve").classList.add("hidden");
+  document.getElementById("redesign-modal").classList.remove("hidden");
+  sendRedesignTurn("Please propose a redesigned version of today's session.", true);
+}
+document.getElementById("redesign-open-btn").addEventListener("click", openRedesignModal);
+document.getElementById("redesign-close").addEventListener("click", () => document.getElementById("redesign-modal").classList.add("hidden"));
+document.getElementById("redesign-reject").addEventListener("click", () => {
+  document.getElementById("redesign-modal").classList.add("hidden");
+  toast("Redesign discarded — program unchanged");
+});
+document.getElementById("redesign-send").addEventListener("click", () => {
+  const input = document.getElementById("redesign-input");
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = "";
+  sendRedesignTurn(text, false);
+});
+document.getElementById("redesign-input").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); document.getElementById("redesign-send").click(); }
+});
+document.getElementById("redesign-approve").addEventListener("click", () => {
+  if (!redesignProposal || !redesignDay) return;
+  const hasInProgress = activeDay === redesignDay && hasLoggedData(liveLog);
+  if (hasInProgress && !confirm("You have unsaved sets logged for today on this day — the exercise list is changing, so they'll be discarded. Continue?")) return;
+  exercises[redesignDay] = redesignProposal.map(ex => ({
+    name: ex.name, sets: ex.sets, reps: `${ex.repMin}–${ex.repMax}`,
+    repMin: ex.repMin, repMax: ex.repMax, weight: ex.weight || null, unilateral: !!ex.unilateral
+  }));
+  lsSet("il:exercises", exercises); // always the PERMANENT program — never routed through override state
+  document.getElementById("redesign-modal").classList.add("hidden");
+  if (activeDay === redesignDay) { liveLog = {}; liveNote = {}; struggleSetAdded = {}; clearLocalSession(); renderExercises(); }
+  toast(`${getDayLabel(redesignDay)} redesigned`);
 });
 
 // ── Calendar ──────────────────────────────────────────────────────────────────

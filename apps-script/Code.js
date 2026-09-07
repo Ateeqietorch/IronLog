@@ -5,6 +5,19 @@ const SWAPS_SHEET       = "ExerciseSwaps";
 const SUMMARIES_SHEET   = "SessionSummaries";
 const CLAUDE_MODEL       = "claude-sonnet-5";
 
+// Explicit training goal, threaded into every AI prompt that proposes or
+// evaluates exercises — makes "what is this optimizing for" a stated fact the
+// model reasons from, instead of something only implicit in the hand-authored
+// default program.
+const TRAINING_GOAL = "Balanced hypertrophy across all trained muscle groups — no specific weak-point priority; even development everywhere.";
+
+// Exercise-selection guardrails shared by every prompt that can propose or
+// substitute exercises (reconsider, presession-check, redesign).
+const EXERCISE_CONSTRAINTS =
+  "Never suggest Barbell Back Squat or Barbell Deadlift (use Hack Squat / Romanian Deadlift patterns instead). " +
+  "The user wants to preserve their lower back, so never suggest a free-standing, unsupported bent-over row " +
+  "(e.g. Pendlay Row, Bent-Over Row) — chest-supported rows (T-Bar, DB) and seated cable/machine rows are fine.";
+
 function doGet(e) {
   try {
     const ss     = SpreadsheetApp.getActiveSpreadsheet();
@@ -127,10 +140,8 @@ function doGet(e) {
       const history = recentExerciseHistory(ss, exercise, 5);
 
       const system = "You are a hypertrophy-training assistant embedded in IronLog, a workout tracker for an " +
-        "intermediate-to-advanced lifter. All weights are in pounds. Never suggest Barbell Back Squat or Barbell " +
-        "Deadlift as a substitute (use Hack Squat / Romanian Deadlift patterns instead). The user wants to " +
-        "preserve their lower back, so never suggest a free-standing, unsupported bent-over row (e.g. Pendlay " +
-        "Row, Bent-Over Row) — chest-supported rows (T-Bar, DB) and seated cable/machine rows are fine. Given " +
+        "intermediate-to-advanced lifter. All weights are in pounds. Training goal: " + TRAINING_GOAL + " " +
+        EXERCISE_CONSTRAINTS + " Given " +
         "the exercise the user wants reconsidered and their stated reason, propose ONE substitute exercise (can be a different " +
         "movement pattern, or the same exercise with adjusted parameters if that better fits the reason) with " +
         "adjusted sets/rep range/working weight, and a brief rationale (1-2 sentences). " +
@@ -183,7 +194,8 @@ function doGet(e) {
 
       const system = "You are a hypertrophy-training coach reviewing a just-completed workout logged in IronLog, " +
         "which auto-applies your recommendations (with the user notified, not asked to confirm each one) — so " +
-        "only recommend a change you're genuinely confident about, not a passing observation. Write a short, " +
+        "only recommend a change you're genuinely confident about, not a passing observation. Training goal: " +
+        TRAINING_GOAL + " Write a short, " +
         "honest, encouraging coaching summary (3-5 sentences): call out notable trends (volume trending low/high " +
         "on a muscle group, RPE drift upward, a pattern of missed/incomplete sets), and if relevant, one concrete " +
         "suggestion for the next session on this day. Separately, decide: (1) should training deload soon — only " +
@@ -237,9 +249,7 @@ function doGet(e) {
 
       const system = "You are a hypertrophy-training assistant embedded in IronLog. Before the user starts " +
         "today's session, decide whether their stated feeling warrants adjusting it. All weights are in pounds. " +
-        "Never suggest Barbell Back Squat or Barbell Deadlift. The user wants to preserve their lower back, so " +
-        "never substitute in a free-standing, unsupported bent-over row (e.g. Pendlay Row, Bent-Over Row) — " +
-        "chest-supported rows (T-Bar, DB) and seated cable/machine rows are fine. You may reduce weight/sets/reps on some or all " +
+        "Training goal: " + TRAINING_GOAL + " " + EXERCISE_CONSTRAINTS + " You may reduce weight/sets/reps on some or all " +
         "exercises (e.g. fatigue, soreness, low sleep), substitute an exercise (e.g. to avoid a sore joint), or " +
         "make no changes if the note doesn't warrant it — most notes should NOT change a well-designed session. " +
         "Keep \"note\" to ONE short sentence — do not explain your reasoning per exercise, just state the object. " +
@@ -271,6 +281,53 @@ function doGet(e) {
         deloadOverride: inDeload && !!parsed.deload_override,
         deloadOverrideNote: parsed.deload_override_note || ""
       });
+    }
+
+    // ── AI: conversational full-day redesign ───────────────────────────────────
+    // Proposes/redesigns an ENTIRE training day (exercise selection, order,
+    // sets/reps/weight) — unlike ai_reconsider (one exercise) or
+    // ai_presession_check (today-only tweaks), this is a permanent program
+    // change, and it's a genuine back-and-forth: the client resends the full
+    // conversation transcript each turn, the user can ask questions or push
+    // back before deciding, and nothing is ever auto-applied here — the
+    // client only writes the proposal to the program when the user approves.
+    if (action === "ai_redesign_day") {
+      const day = e.parameter.day;
+      let currentExercises, transcript;
+      try { currentExercises = JSON.parse(e.parameter.exercises); } catch (err) { currentExercises = []; }
+      try { transcript = JSON.parse(e.parameter.transcript); } catch (err) { transcript = []; }
+      if (!Array.isArray(transcript) || !transcript.length) {
+        transcript = [{ role: "user", content: "Please propose a redesigned version of today's session." }];
+      }
+
+      const planLines = currentExercises.map(ex =>
+        ex.name + ": " + ex.sets + " sets x " + ex.repMin + "-" + ex.repMax +
+        " reps @ " + (ex.weight || "BW") + (ex.weight ? "lb" : "")
+      ).join("\n");
+      const priorLog = recentDayHistoryExcluding(ss, day, "", 3);
+
+      const system = "You are a hypertrophy-training coach redesigning one full training day in IronLog, a " +
+        "workout tracker. All weights are in pounds. Training goal: " + TRAINING_GOAL + " " + EXERCISE_CONSTRAINTS + " " +
+        "Day being redesigned: " + day + ". Currently programmed:\n" + planLines +
+        "\n\nRecent sessions on this day:\n" + (priorLog || "No prior sessions on record.") +
+        "\n\nDesign a well-ordered day: compound movements before isolation, a sensible exercise count (typically " +
+        "5-8), balanced coverage of the muscles this day trains, and NEVER place two isolation exercises for the " +
+        "same muscle/movement pattern back-to-back (e.g. two lateral raise variants in a row) — vary the angle or " +
+        "separate them with something else. Use appropriate rep ranges per exercise type (compounds lower/heavier, " +
+        "isolation higher/lighter) and a reasonable working weight informed by their recent history. " +
+        "This is a CONVERSATION — the user may ask questions, push back, or give specific direction between " +
+        "proposals. Answer conversationally in \"message\" and only change \"exercises\" when their input actually " +
+        "warrants it — if they're just asking a question, return the exact same exercise list you last proposed, " +
+        "unchanged. Respond with ONLY a single valid JSON object and NOTHING else — no preamble, no explanation, no markdown fences, no closing remarks. Your entire response must start with { and end with }, matching exactly this shape: " +
+        '{"message": string, "exercises": [{"name": string, "sets": number, "repMin": number, "repMax": number, ' +
+        '"weight": number|null, "unilateral": boolean}]}';
+
+      const raw = callClaudeMessages(system, transcript, 3072);
+      const parsed = parseClaudeJson(raw);
+      if (!parsed || !Array.isArray(parsed.exercises) || !parsed.exercises.length) {
+        return respond({ ok: false, msg: "Could not parse AI response. Raw: " + String(raw).slice(0, 500) });
+      }
+      return respond({ ok: true, message: parsed.message || "", exercises: parsed.exercises });
     }
 
     // ── AI: log a completed session from a free-text description ──────────────
@@ -363,7 +420,10 @@ function getOrCreateSheet(ss, name, headerRow) {
 // ── Claude API ────────────────────────────────────────────────────────────────
 // API key lives only here, server-side (Project Settings > Script Properties),
 // never in client JS or git.
-function callClaude(system, userText, maxTokens) {
+// Shared HTTP call — takes a full messages array so a multi-turn conversation
+// (the redesign-day feature) can send its actual back-and-forth, not just one
+// user turn. callClaude() below wraps this for the single-shot actions.
+function callClaudeMessages(system, messages, maxTokens) {
   const apiKey = PropertiesService.getScriptProperties().getProperty("ANTHROPIC_API_KEY");
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set in Script Properties");
 
@@ -371,7 +431,7 @@ function callClaude(system, userText, maxTokens) {
     model: CLAUDE_MODEL,
     max_tokens: maxTokens || 1024,
     system: system,
-    messages: [{ role: "user", content: userText }]
+    messages: messages
   };
 
   const resp = UrlFetchApp.fetch("https://api.anthropic.com/v1/messages", {
@@ -392,6 +452,9 @@ function callClaude(system, userText, maxTokens) {
   }
   const textBlock = (body.content || []).filter(b => b.type === "text")[0];
   return textBlock ? textBlock.text : "";
+}
+function callClaude(system, userText, maxTokens) {
+  return callClaudeMessages(system, [{ role: "user", content: userText }], maxTokens);
 }
 
 // Claude is asked to return raw JSON, but strip markdown fences defensively
