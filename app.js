@@ -1,28 +1,59 @@
 // ── Config ────────────────────────────────────────────────────────────────────
 const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzIeypeOjfnkypcsj7AdMHiO_e23bx3VzSIVy_9A2A8oF03zTTVH0G1BJ7XMV1QS6JJ/exec";
-const LOWER_DAYS = ["Day 3 — Legs","Day 5 — Lower"];
 const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 const DOW = ["Su","Mo","Tu","We","Th","Fr","Sa"];
 
 // Science-based constants
-const STRUGGLE_THRESHOLD  = 0.15; // 15% below target reps on set 1
-const WEIGHT_DROP_PCT     = 0.12; // 12% weight reduction when struggling
+const STRUGGLE_THRESHOLD  = 0.15; // 15% below target reps on set 1 — no specific study pins this number; RPE (below) is the primary struggle signal, this is a secondary reps-based catch
 const STAGNATION_SESSIONS = 3;    // consecutive sessions same e1RM = stagnant
 const PERF_LOSS_SESSIONS  = 2;    // consecutive drops in e1RM = declining
 const MEV_SETS            = 10;   // fallback minimum effective volume per muscle/week
 const MRV_SETS            = 20;   // fallback maximum recoverable volume per muscle/week
 const HARD_SET_RPE        = 7;    // sets at/above this RPE count as "hard" (growth-driving)
 
-// Mesocycle / deload constants. Evidence: ~4-8wk blocks for trained lifters,
-// ~30-50% volume/intensity cut for ~1wk deloads. We default to a 6-week
-// cycle per user preference, but evaluate on every load rather than just
-// counting down — sustained near-failure RPE (or an AI review's judgment)
-// can pull a deload forward before the scheduled week arrives.
+// Autoregulated back-off after a struggling/failed set. Search results across
+// autoregulation writeups converge on roughly a 10-25% weight cut depending on
+// how bad the miss was and how the lifter feels — not one fixed number. This
+// scales within that band: a near-miss gets a light 10% trim, a total failure
+// gets the full 25%, and hitting true failure (RPE>=9.5) on top of a miss
+// pushes it further toward the top of the range.
+function computeBackoffPct(actualReps, targetReps, rpe) {
+  const missedFrac = Math.max(0, Math.min(1, 1 - (actualReps || 0) / (targetReps || 1)));
+  let pct = 0.10 + missedFrac * 0.15; // 10% (barely missed) -> 25% (zero reps)
+  const r = parseFloat(rpe);
+  if (!isNaN(r) && r >= 9.5) pct += 0.05;
+  return Math.min(0.25, pct);
+}
+
+// Progression load increment. ACSM guidance: increase load ~2-10% once the
+// full prescribed rep range is met comfortably. A flat lb bump (this app's
+// old approach) isn't proportional — the same +5lb is a rounding error on a
+// 225lb bench and a 25% jump on a 20lb dumbbell curl. Landing near the middle
+// of ACSM's range (5%), floored at 2.5lb since that's the smallest increment
+// most gym plates/dumbbells actually offer — below that floor there's
+// nothing to add even when the math calls for less.
+function computeBumpAmount(weight) {
+  return Math.max(2.5, roundToNearest((weight || 0) * 0.05, 2.5));
+}
+
+// Mesocycle / deload constants. MESOCYCLE_WEEKS/DELOAD_DAYS default to a
+// 6-week cycle with a ~1wk deload per user preference, evaluated on every
+// load rather than counted down — sustained near-failure RPE (or an AI
+// review's judgment) can pull it forward. The magnitudes below come from a
+// 2022 cross-sectional survey of strength/physique coaches' actual deload
+// practices (Bell et al., "You can't shoot another bullet until you've
+// reloaded the gun"): coaches typically cut EITHER external load ~7.5-15%
+// OR raise RIR to >=4 on everything, not both stacked at full strength —
+// and separately cut volume ~25% (physique/bodybuilding coaches) to 50%+
+// (strength coaches, more aggressive). This app's stated goal is hypertrophy,
+// so the more conservative bodybuilding-coach numbers apply, and the load
+// cut sits at the gentle end since the RPE cap is doing autoregulation work
+// on top of it.
 const MESOCYCLE_WEEKS    = 6;
 const DELOAD_DAYS        = 7;
-const DELOAD_RPE_CAP     = 8;    // target RPE never exceeds this during a deload
-const DELOAD_WEIGHT_PCT  = 0.85; // working weight cut during a deload
-const DELOAD_SET_PCT     = 0.5;  // set count cut during a deload
+const DELOAD_RPE_CAP     = 6;    // target RPE never exceeds this during a deload (RIR ~4, matching surveyed practice)
+const DELOAD_WEIGHT_PCT  = 0.90; // ~10% working-weight cut during a deload
+const DELOAD_SET_PCT     = 0.75; // ~25% set-count cut during a deload (bodybuilding-coach precedent, not powerlifting's deeper cut)
 const DELOAD_TRIGGER_RPE = 9.3;  // avg RPE at/above this over the recent window = early trigger
 
 // Per-muscle weekly volume landmarks (hard sets). Based on typical hypertrophy
@@ -518,7 +549,7 @@ function computeTarget(ex, history, meso) {
   const failed = lastRows.filter(r => !isWorkingSet(r.weight, r.reps) && parseFloat(r.weight) > 0 && parseFloat(r.reps) === 0);
 
   if (!valid.length) {
-    const dropped = roundToNearest(programWeight * (1 - WEIGHT_DROP_PCT), 2.5);
+    const dropped = roundToNearest(programWeight * (1 - computeBackoffPct(0, ex.repMin, null)), 2.5);
     const backoff = failed.length ? { weight: dropped, reps: ex.repMin } : null;
     return { weight: dropped, reps: ex.repMin, e1rm: calcE1RM(dropped, ex.repMin), reason: "backoff", backoff };
   }
@@ -528,8 +559,10 @@ function computeTarget(ex, history, meso) {
   const rpeVals   = valid.map(r => parseFloat(r.rpe)).filter(v => !isNaN(v));
   const medRPE    = rpeVals.length ? median(rpeVals) : null;
   const hitRatio  = valid.filter(r => parseFloat(r.reps) >= ex.repMax).length / valid.length;
-  const bump      = LOWER_DAYS.some(d => d === ex._day) ? 10 : 5;
-  const backoff   = failed.length ? { weight: roundToNearest(medWeight * (1 - WEIGHT_DROP_PCT), 2.5), reps: ex.repMin } : null;
+  const bump      = computeBumpAmount(medWeight);
+  // Some sets failed outright (0 reps) even though others were valid — treat
+  // as a full miss for backoff severity, same as the all-failed branch above.
+  const backoff   = failed.length ? { weight: roundToNearest(medWeight * (1 - computeBackoffPct(0, ex.repMin, medRPE)), 2.5), reps: ex.repMin } : null;
 
   // Deload overrides everything else — always ease off regardless of how
   // last session went.
@@ -584,7 +617,7 @@ function computeTargetPerSet(ex, setIndex, history) {
     }
   }
 
-  const bump = LOWER_DAYS.some(d => d === ex._day) ? 10 : 5;
+  const bump = computeBumpAmount(lastWeight);
   if (lastReps >= ex.repMax) {
     return { weight: lastWeight + bump, reps: ex.repMin, e1rm: calcE1RM(lastWeight + bump, ex.repMin), reason: "progress" };
   }
@@ -1332,7 +1365,7 @@ function checkFirstSetStruggle(exIdx, setIdx) {
   // suggestion computed off the higher, already-rejected number, which can
   // come out ABOVE what was just failed.
   const baseWeight = hasWeight ? Math.min(actualWeight, ex.weight) : ex.weight;
-  const suggestedWeight = roundToNearest(baseWeight * (1 - WEIGHT_DROP_PCT), 2.5);
+  const suggestedWeight = roundToNearest(baseWeight * (1 - computeBackoffPct(actual, targetReps, rpe)), 2.5);
   const isFirstCompound = exIdx === 0 && ex.repMax <= 10;
 
   if (card) {
