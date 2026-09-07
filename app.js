@@ -819,12 +819,48 @@ function toast(msg) {
 
 // ── Rest timer ────────────────────────────────────────────────────────────────
 // Starts whenever a set is marked complete (the ✓ shortcut, or manually
-// finishing a set's reps/RPE). Compound work needs longer recovery for the
-// next heavy set than isolation work — 150s vs 75s (Schoenfeld/Grgic:
-// longer inter-set rest for compounds trends toward more hypertrophy at the
-// same total volume, since less residual fatigue carries into the next set).
-const REST_SECONDS_COMPOUND  = 150;
-const REST_SECONDS_ISOLATION = 75;
+// finishing a set's reps/RPE).
+//
+// What the current evidence actually supports, and what it doesn't:
+// - A 2024 Bayesian meta-analysis (Refalo et al., "Give it a Rest") found a
+//   small HYPERTROPHY benefit for rest >60s vs <60s, but no appreciable
+//   further benefit resting >90s — the growth dose-response is flat well
+//   below what feels like a "long" rest. It also found proximity-to-failure
+//   (how hard the prior set was taken) did NOT meaningfully interact with
+//   rest duration for the hypertrophy outcome specifically.
+// - So this is deliberately NOT "harder set -> more muscle if you rest
+//   longer." The RPE/muscle-size scaling below is justified on a different,
+//   better-supported basis: PERFORMANCE and SAFETY on the next set, not
+//   hypertrophy per se. Velocity/kinematic studies on the squat, bench, and
+//   deadlift show measurable technique and bar-speed degradation under
+//   fatigue+intensity, and the autoregulation literature supports trained
+//   lifters using RPE/readiness rather than a fixed clock to manage that.
+// - The muscle-mass-size effect (large muscle groups needing more recovery)
+//   is a physiologically plausible extrapolation from the well-established
+//   fact that multi-joint/large-muscle compounds produce more systemic
+//   fatigue (HR, lactate) than isolation work — but a review of this
+//   specific question (de Salles et al.) states outright that direct
+//   evidence for it is lacking. It's applied here as a modest adjustment,
+//   not a strong claim.
+function computeRestSeconds(ex, rpe) {
+  const group = getMuscleGroup(ex.name);
+  const LARGE_GROUPS = ["Quads", "Hamstrings", "Glutes", "Back", "Chest"];
+  const isLarge = LARGE_GROUPS.includes(group);
+  const isHeavyCompound = ex.repMax <= 8;   // near-max-effort, low-rep work — the strongest literature basis (Grgic 2017) for needing long rest to maximize subsequent-set performance
+  const isSmallIsolation = ex.repMax >= 12 && !isLarge;
+
+  let base;
+  if (isHeavyCompound) base = isLarge ? 150 : 120;
+  else if (isSmallIsolation) base = 75;
+  else base = isLarge ? 120 : 90; // moderate rep-range work, or big-muscle-group work outside the strict "heavy compound" band (e.g. Leg Press at 10-12 reps)
+
+  const r = parseFloat(rpe);
+  if (!isNaN(r)) {
+    if (r >= 9.5) base *= isLarge ? 1.4 : 1.25; // near/true failure — protect next-set quality and technique, bigger effect where systemic fatigue is bigger
+    else if (r <= 7) base *= 0.85;               // comfortably sub-maximal — no reason to sit through a full rest the growth dose-response doesn't reward anyway
+  }
+  return Math.max(45, Math.round(base / 5) * 5);
+}
 let restTimerInterval = null;
 let restTimerEndsAt = null;
 
@@ -1118,7 +1154,7 @@ async function renderExercises() {
       target = { ...target, targetRPE: targetRPEForSet(si, ex.sets, meso.inDeload) };
       const analysis = analyseSetHistory(setHist);
       setTargets.push(target);
-      renderedTargets[i][si] = { weight: target.weight, reps: target.reps };
+      renderedTargets[i][si] = { weight: target.weight, reps: target.reps, targetRPE: target.targetRPE };
       setStatuses.push(analysis);
     }
 
@@ -1354,14 +1390,28 @@ function bindExerciseInputs(container, curEx) {
     });
   });
 
-  // Manual entry (not using the ✓ shortcut) still deserves a rest timer —
-  // fires once, when the rep count is filled in and the field loses focus,
-  // rather than on every keystroke.
+  // Manual entry (not using the ✓ shortcut) still deserves a rest timer.
+  // Reps typically get filled in before RPE, so start on reps-blur with
+  // whatever RPE is known yet (usually none), then restart with the real
+  // number once RPE is actually entered — better information supersedes
+  // the initial estimate rather than being ignored.
   container.querySelectorAll(".set-r").forEach(inp => {
     inp.addEventListener("blur", e => {
       const i=parseInt(e.target.dataset.ex);
       const st = liveLog[i]?.sets?.[parseInt(e.target.dataset.set)];
-      if (st?.weight && st?.reps) startRestTimer(curEx[i]?.repMax <= 10 ? REST_SECONDS_COMPOUND : REST_SECONDS_ISOLATION);
+      if (st?.weight && st?.reps && curEx[i]) startRestTimer(computeRestSeconds(curEx[i], st.rpe));
+    });
+  });
+  container.querySelectorAll(".set-rpe").forEach(inp => {
+    inp.addEventListener("blur", e => {
+      const i=parseInt(e.target.dataset.ex);
+      const st = liveLog[i]?.sets?.[parseInt(e.target.dataset.set)];
+      // Only restart an already-running timer for THIS set — don't start one
+      // from an isolated RPE entry with no weight/reps, and don't clobber a
+      // timer from a different exercise/set that's already counting down.
+      if (st?.weight && st?.reps && st?.rpe && curEx[i] && restTimerInterval) {
+        startRestTimer(computeRestSeconds(curEx[i], st.rpe));
+      }
     });
   });
 
@@ -1405,7 +1455,11 @@ function bindExerciseInputs(container, curEx) {
         let e1rmEl = row.querySelector(".e1rm-display");
         if (!e1rmEl) { e1rmEl=document.createElement("span"); e1rmEl.className="e1rm-display"; row.appendChild(e1rmEl); }
         e1rmEl.innerHTML = `e1RM:<span class="e1rm-val">${e1rm}</span>`;
-        startRestTimer(curEx[i]?.repMax <= 10 ? REST_SECONDS_COMPOUND : REST_SECONDS_ISOLATION);
+        // No actual RPE logged yet at the moment of tapping ✓ — use the
+        // session's planned target RPE as the best available estimate; the
+        // .set-rpe blur handler above will restart with the real number if
+        // the user fills one in afterward.
+        if (curEx[i]) startRestTimer(computeRestSeconds(curEx[i], liveLog[i].sets[si].rpe || target.targetRPE));
       } else {
         liveLog[i].sets[si].hit = false;
         btn.classList.remove("hit");
