@@ -7,6 +7,9 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="theme-color" content="#0a0a0a" />
   <title>IRONLOG</title>
+  <link rel="manifest" href="manifest.json" />
+  <link rel="icon" href="icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Bebas+Neue&display=swap" rel="stylesheet" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
@@ -20,6 +23,13 @@
   </div>
 
   <div id="app" class="app hidden">
+
+    <div id="rest-timer" class="rest-timer hidden">
+      <span id="rest-timer-label" class="rest-timer-label">Rest</span>
+      <span id="rest-timer-value" class="rest-timer-value">1:30</span>
+      <button id="rest-timer-add15" class="rest-timer-btn">+15s</button>
+      <button id="rest-timer-skip" class="rest-timer-btn">Skip</button>
+    </div>
 
     <header class="header">
       <div class="header-left">
@@ -46,6 +56,10 @@
           <button id="draft-continue" class="btn-sm-gold">Continue</button>
           <button id="draft-discard" class="btn-sm-ghost">Discard</button>
         </div>
+      </div>
+      <div id="up-next-banner" class="up-next-banner hidden">
+        <div id="up-next-text" class="up-next-text"></div>
+        <button id="up-next-switch" class="btn-sm-gold hidden">Switch</button>
       </div>
       <div id="meso-banner" class="meso-banner hidden"></div>
       <div id="workout-alert" class="workout-alert hidden"></div>

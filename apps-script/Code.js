@@ -191,6 +191,7 @@ function doGet(e) {
 
       const sessionLog = formatRowsForReview(sessionRows);
       const priorLog    = recentDayHistoryExcluding(ss, day, sessionKey, 3);
+      const abCoreStatus = recentAbCoreCheck(ss, 14);
 
       const system = "You are a hypertrophy-training coach reviewing a just-completed workout logged in IronLog, " +
         "which auto-applies your recommendations (with the user notified, not asked to confirm each one) — so " +
@@ -198,7 +199,11 @@ function doGet(e) {
         TRAINING_GOAL + " Write a short, " +
         "honest, encouraging coaching summary (3-5 sentences): call out notable trends (volume trending low/high " +
         "on a muscle group, RPE drift upward, a pattern of missed/incomplete sets), and if relevant, one concrete " +
-        "suggestion for the next session on this day. Separately, decide: (1) should training deload soon — only " +
+        "suggestion for the next session on this day. Ab/core work is intentionally not part of the structured " +
+        "program (no tracked exercise for it), but if it hasn't been done in the last 14 days, briefly mention " +
+        "it's worth adding a couple sets somewhere — this is a plain-text suggestion only, never a structured " +
+        "adjustment (never put it in \"adjustments\", which is for HOLDING an existing programmed exercise). " +
+        "Separately, decide: (1) should training deload soon — only " +
         "recommend this for a clear, sustained pattern (RPE pinned near failure across multiple sessions, " +
         "stalling/declining performance on multiple exercises), not from one hard session; (2) for any exercise " +
         "that should HOLD at its current weight/reps next time rather than progress (e.g. it's clearly grinding, " +
@@ -209,7 +214,8 @@ function doGet(e) {
         '"adjustments": [{"exercise": string, "hold": boolean, "note": string}]}';
 
       const userText = "Training day: " + day + " (" + date + ")\n\nJust-logged session:\n" + sessionLog +
-        "\n\nRecent sessions on this same day for comparison:\n" + (priorLog || "No prior sessions on record.");
+        "\n\nRecent sessions on this same day for comparison:\n" + (priorLog || "No prior sessions on record.") +
+        "\n\nAb/core training logged anywhere in the last 14 days? " + abCoreStatus;
 
       const raw = callClaude(system, userText, 2048);
       const parsed = parseClaudeJson(raw);
@@ -305,11 +311,16 @@ function doGet(e) {
         " reps @ " + (ex.weight || "BW") + (ex.weight ? "lb" : "")
       ).join("\n");
       const priorLog = recentDayHistoryExcluding(ss, day, "", 3);
+      const abCoreStatus = recentAbCoreCheck(ss, 14);
 
       const system = "You are a hypertrophy-training coach redesigning one full training day in IronLog, a " +
         "workout tracker. All weights are in pounds. Training goal: " + TRAINING_GOAL + " " + EXERCISE_CONSTRAINTS + " " +
         "Day being redesigned: " + day + ". Currently programmed:\n" + planLines +
         "\n\nRecent sessions on this day:\n" + (priorLog || "No prior sessions on record.") +
+        "\n\nAb/core training logged anywhere in the last 14 days? " + abCoreStatus + " Ab/core work is " +
+        "intentionally NOT part of the structured program — do not add an ab/core exercise to \"exercises\" on " +
+        "your own initiative. If none has been done recently, you may mention it as a suggestion in \"message\", " +
+        "and only add one to \"exercises\" if the user explicitly asks for it in the conversation. " +
         "\n\nDesign a well-ordered day: compound movements before isolation, a sensible exercise count (typically " +
         "5-8), balanced coverage of the muscles this day trains, and NEVER place two isolation exercises for the " +
         "same muscle/movement pattern back-to-back (e.g. two lateral raise variants in a row) — vary the angle or " +
@@ -515,6 +526,31 @@ function recentDayHistoryExcluding(ss, day, excludeKey, limit) {
   }
   const sessions = Object.values(bySession).sort((a, b) => b.date.localeCompare(a.date)).slice(0, limit || 3);
   return sessions.map(s => s.date + ":\n" + formatRowsForReview(null, s.rows)).join("\n\n");
+}
+
+// Ab/core work is deliberately NOT part of the structured program (no
+// MUSCLE_GROUPS_MAP entry, no EXERCISE_REPO listing, never auto-inserted) —
+// but the AI should still notice when none has been logged and say so as a
+// plain-text suggestion. Scans ALL logged history (not just one day) for any
+// exercise name matching a common ab/core keyword, across every training day,
+// since core work doesn't belong to any single day in this program.
+const AB_CORE_KEYWORDS = ["crunch","plank","sit-up","situp","leg raise","ab wheel","hanging knee",
+  "russian twist","woodchop","dead bug","hollow hold","mountain climber","core","ab rollout"];
+function recentAbCoreCheck(ss, windowDays) {
+  const rows = ss.getSheetByName(SESSIONS_SHEET).getDataRange().getValues();
+  let lastDate = null, lastName = null;
+  for (let i = 1; i < rows.length; i++) {
+    const exercise = rows[i][2];
+    if (!exercise) continue;
+    const lower = String(exercise).toLowerCase();
+    if (!AB_CORE_KEYWORDS.some(k => lower.includes(k))) continue;
+    const d = cleanDate(rows[i][0]);
+    if (!lastDate || d > lastDate) { lastDate = d; lastName = exercise; }
+  }
+  if (!lastDate) return "No ab/core exercise has ever been logged.";
+  const daysSince = Math.round((new Date() - new Date(lastDate)) / 86400000);
+  if (daysSince <= windowDays) return `Yes — ${lastName} on ${lastDate} (${daysSince} day${daysSince===1?"":"s"} ago).`;
+  return `Not recently — last was ${lastName} on ${lastDate} (${daysSince} days ago).`;
 }
 
 // Formats either raw sheet rows (from Sheet1) or {exercise,set,weight,reps,rpe,completed}

@@ -19,6 +19,14 @@ html,body { background:var(--bg); color:var(--text); font-family:var(--font-mono
 .app { display:flex; flex-direction:column; min-height:100vh; max-width:600px; margin:0 auto; }
 .hidden { display:none !important; }
 
+/* REST TIMER */
+.rest-timer { position:fixed; left:50%; transform:translateX(-50%); bottom:0; width:100%; max-width:600px; z-index:150; display:flex; align-items:center; gap:10px; background:#151008; border-top:1px solid var(--gold); padding:10px 16px; padding-bottom:calc(10px + env(safe-area-inset-bottom)); }
+.rest-timer.done { background:#0f1a0f; border-top-color:var(--green); }
+.rest-timer-label { font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--text3); }
+.rest-timer-value { font-family:var(--font-display); font-size:22px; color:var(--gold); flex:1; }
+.rest-timer.done .rest-timer-value { color:var(--green); }
+.rest-timer-btn { background:none; border:1px solid var(--border2); color:var(--text2); cursor:pointer; font-family:var(--font-mono); font-size:10px; letter-spacing:.06em; text-transform:uppercase; padding:6px 10px; border-radius:3px; }
+
 /* HEADER */
 .header { display:flex; align-items:center; justify-content:space-between; padding:13px 18px; border-bottom:1px solid var(--border); position:sticky; top:0; background:var(--bg); z-index:10; }
 .header-left { display:flex; align-items:center; gap:10px; }
@@ -47,6 +55,10 @@ html,body { background:var(--bg); color:var(--text); font-family:var(--font-mono
 .workout-alert { background:#1a1210; border:1px solid var(--red); border-radius:4px; padding:10px 13px; margin-bottom:14px; font-size:11px; color:var(--red); line-height:1.6; }
 .meso-banner { background:var(--bg2); border:1px solid var(--border2); border-radius:4px; padding:8px 13px; margin-bottom:14px; font-size:10px; color:var(--text3); letter-spacing:.02em; line-height:1.5; }
 .meso-banner.deload { background:#0a1420; border-color:#1a3050; color:#8ab0e0; }
+.up-next-banner { background:var(--bg2); border:1px solid var(--border2); border-radius:4px; padding:9px 13px; margin-bottom:14px; display:flex; align-items:center; justify-content:space-between; gap:10px; }
+.up-next-text { font-size:10px; color:var(--text2); line-height:1.5; }
+.up-next-banner.nudge { background:#1a1608; border-color:#3a3018; }
+.up-next-banner.nudge .up-next-text { color:var(--yellow); }
 .workout-alert.warning { border-color:var(--yellow); color:var(--yellow); background:#1a1a10; }
 
 /* LABELS */
@@ -138,6 +150,7 @@ input::placeholder { color:var(--text4); }
 .ex-alert.fatigue { color:var(--yellow); background:#1a1608; border:1px solid #3a3018; }
 .ex-alert.deload { color:#8ab0e0; background:#0a1420; border:1px solid #1a3050; }
 .ex-alert.hold { color:var(--text2); background:var(--bg3); border:1px solid var(--border2); }
+.warmup-ramp { font-size:10px; color:var(--text3); padding:0 0 8px; }
 
 /* BADGE */
 .badge-uni { font-size:8px; color:var(--gold); border:1px solid var(--gold); border-radius:2px; padding:1px 5px; letter-spacing:.06em; margin-left:5px; vertical-align:middle; }

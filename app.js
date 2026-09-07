@@ -670,6 +670,16 @@ function lsGet(k,fb) { try { const v=localStorage.getItem(k); return v?JSON.pars
 function lsSet(k,v) { try { localStorage.setItem(k,JSON.stringify(v)); } catch {} }
 function roundToNearest(val, nearest) { return Math.round(val / nearest) * nearest; }
 
+// Suggested warmup ramp for a compound lift's working weight — three
+// ascending, descending-rep sets (standard ramping scheme) so the top set
+// isn't the first heavy weight touched that session. Display-only guidance;
+// warmup sets are never logged in this app, only the working sets.
+function buildWarmupRamp(workingWeight) {
+  if (!workingWeight || workingWeight <= 0) return null;
+  const steps = [[0.4,8],[0.6,5],[0.8,3]];
+  return steps.map(([pct,reps]) => ({ weight: roundToNearest(workingWeight*pct, 5), reps }));
+}
+
 // ── Session override mode ────────────────────────────────────────────────────
 // Returns the exercise list currently being edited: the permanent program for
 // activeDay, or a throwaway copy of it while "Override Today" is on. Overrides
@@ -806,6 +816,59 @@ function toast(msg) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => el.classList.add("hidden"), 3000);
 }
+
+// ── Rest timer ────────────────────────────────────────────────────────────────
+// Starts whenever a set is marked complete (the ✓ shortcut, or manually
+// finishing a set's reps/RPE). Compound work needs longer recovery for the
+// next heavy set than isolation work — 150s vs 75s (Schoenfeld/Grgic:
+// longer inter-set rest for compounds trends toward more hypertrophy at the
+// same total volume, since less residual fatigue carries into the next set).
+const REST_SECONDS_COMPOUND  = 150;
+const REST_SECONDS_ISOLATION = 75;
+let restTimerInterval = null;
+let restTimerEndsAt = null;
+
+function formatRestTime(sec) {
+  const s = Math.max(0, Math.round(sec));
+  return `${Math.floor(s/60)}:${String(s%60).padStart(2,"0")}`;
+}
+function tickRestTimer() {
+  const el = document.getElementById("rest-timer");
+  const remaining = (restTimerEndsAt - Date.now()) / 1000;
+  if (remaining <= 0) {
+    document.getElementById("rest-timer-value").textContent = "0:00";
+    el.classList.add("done");
+    document.getElementById("rest-timer-label").textContent = "Rest done";
+    clearInterval(restTimerInterval);
+    restTimerInterval = null;
+    if (navigator.vibrate) navigator.vibrate([200,100,200]);
+    return;
+  }
+  document.getElementById("rest-timer-value").textContent = formatRestTime(remaining);
+}
+function startRestTimer(seconds) {
+  restTimerEndsAt = Date.now() + seconds*1000;
+  const el = document.getElementById("rest-timer");
+  el.classList.remove("hidden", "done");
+  document.getElementById("rest-timer-label").textContent = "Rest";
+  tickRestTimer();
+  clearInterval(restTimerInterval);
+  restTimerInterval = setInterval(tickRestTimer, 500);
+}
+function stopRestTimer() {
+  clearInterval(restTimerInterval);
+  restTimerInterval = null;
+  document.getElementById("rest-timer").classList.add("hidden");
+}
+document.getElementById("rest-timer-skip").addEventListener("click", stopRestTimer);
+document.getElementById("rest-timer-add15").addEventListener("click", () => {
+  if (restTimerEndsAt == null) return;
+  restTimerEndsAt += 15000;
+  document.getElementById("rest-timer").classList.remove("done");
+  document.getElementById("rest-timer-label").textContent = "Rest";
+  tickRestTimer();
+  if (!restTimerInterval) restTimerInterval = setInterval(tickRestTimer, 500);
+});
 
 // ── Local session snapshot ───────────────────────────────────────────────────
 // The remote draft below needs a round trip to Apps Script on EVERY input and
@@ -959,7 +1022,7 @@ async function recoverDraft() {
     activeDay = local.day; sessDate = local.date;
     document.getElementById("session-date").value = local.date;
     liveLog = local.liveLog || {}; liveNote = local.liveNote || {}; struggleSetAdded = {};
-    renderDayButtons(); await renderExercises(); renderLastSession();
+    renderDayButtons(); await renderExercises(); renderLastSession(); renderUpNextBanner();
     toast(`Recovered local session from ${local.date}`);
     return;
   }
@@ -976,7 +1039,7 @@ async function recoverDraft() {
     activeDay = match.day; sessDate = match.date;
     document.getElementById("session-date").value = match.date;
     applyDraftToLiveLog(match);
-    renderDayButtons(); renderExercises(); renderLastSession();
+    renderDayButtons(); renderExercises(); renderLastSession(); renderUpNextBanner();
     toast(`Recovered draft: ${getDayLabel(match.day)} from ${match.date}`);
   } catch(e) {
     toast("Couldn't check drafts: " + e.message);
@@ -1036,6 +1099,7 @@ async function renderExercises() {
     // Unilateral exercises keep the legacy per-set-index target.
     const exTarget = ex.unilateral ? null : computeTarget({ ...ex, _day: activeDay }, history, meso);
     const aiAdj = getAiAdjustment(ex.name);
+    const warmup = (isCompound && !ex.unilateral && !meso.inDeload) ? buildWarmupRamp(exTarget?.weight || ex.weight) : null;
 
     // Build per-set targets and analysis
     const setTargets = [];
@@ -1144,6 +1208,7 @@ async function renderExercises() {
       ${highFatigue ? `<div class="ex-alert fatigue">⚡ High ${exGroup.toLowerCase()} fatigue — targeting higher reps</div>` : ""}
       ${meso.inDeload ? `<div class="ex-alert deload">🔻 Deload week — eased target</div>` : ""}
       ${!meso.inDeload && aiAdj ? `<div class="ex-alert hold">⏸ AI: holding progression — ${aiAdj.note || "stabilize before pushing further"}</div>` : ""}
+      ${warmup ? `<div class="warmup-ramp">Warmup: ${warmup.map(w=>`${w.weight}×${w.reps}`).join(" → ")}</div>` : ""}
       <div class="sets-container">${setsHTML}</div>
       <div class="notes-row">
         <div class="notes-label">Notes</div>
@@ -1289,6 +1354,17 @@ function bindExerciseInputs(container, curEx) {
     });
   });
 
+  // Manual entry (not using the ✓ shortcut) still deserves a rest timer —
+  // fires once, when the rep count is filled in and the field loses focus,
+  // rather than on every keystroke.
+  container.querySelectorAll(".set-r").forEach(inp => {
+    inp.addEventListener("blur", e => {
+      const i=parseInt(e.target.dataset.ex);
+      const st = liveLog[i]?.sets?.[parseInt(e.target.dataset.set)];
+      if (st?.weight && st?.reps) startRestTimer(curEx[i]?.repMax <= 10 ? REST_SECONDS_COMPOUND : REST_SECONDS_ISOLATION);
+    });
+  });
+
   // Unilateral
   ["set-wL","set-rL","set-wR","set-rR"].forEach(cls => {
     container.querySelectorAll("."+cls).forEach(inp => {
@@ -1329,6 +1405,7 @@ function bindExerciseInputs(container, curEx) {
         let e1rmEl = row.querySelector(".e1rm-display");
         if (!e1rmEl) { e1rmEl=document.createElement("span"); e1rmEl.className="e1rm-display"; row.appendChild(e1rmEl); }
         e1rmEl.innerHTML = `e1RM:<span class="e1rm-val">${e1rm}</span>`;
+        startRestTimer(curEx[i]?.repMax <= 10 ? REST_SECONDS_COMPOUND : REST_SECONDS_ISOLATION);
       } else {
         liveLog[i].sets[si].hit = false;
         btn.classList.remove("hit");
@@ -1393,6 +1470,79 @@ function bindExerciseInputs(container, curEx) {
   });
 }
 
+// ── Up Next: day suggestion + adherence nudge ────────────────────────────────
+// The app never had any opinion on which day you should train, or whether
+// you'd gone unusually long without a session — pure manual tab-picking.
+// This is read-only guidance, not automation: it never switches your day for
+// you, just surfaces the "Switch" button.
+function getLastTrainedDate(day) {
+  const overrideLabel = `${day} (Override)`;
+  const dates = Object.values(sessions)
+    .filter(s => s.day === day || s.day === overrideLabel)
+    .map(s => s.date);
+  return dates.length ? dates.sort().slice(-1)[0] : null;
+}
+// Oldest-last-trained-first, so a day never trained (or trained longest ago)
+// surfaces before one you just did — a simple recency-rotation heuristic,
+// not a real periodization model, but better than pure manual picking.
+function getSuggestedDay() {
+  const days = allProgramDays();
+  if (days.length < 2) return null;
+  const withDates = days.map(d => ({ day: d, last: getLastTrainedDate(d) }));
+  withDates.sort((a, b) => {
+    if (!a.last && !b.last) return 0;
+    if (!a.last) return -1;
+    if (!b.last) return 1;
+    return a.last.localeCompare(b.last);
+  });
+  const top = withDates[0];
+  return { day: top.day, daysSince: top.last ? daysBetween(top.last, todayStr()) : null };
+}
+// Flags an unusually long gap relative to the user's OWN recent cadence —
+// not a fixed threshold, since everyone trains at a different frequency.
+function computeAdherenceNudge() {
+  const dates = [...new Set(Object.values(sessions).map(s => s.date))].sort();
+  if (dates.length < 4) return null;
+  const recent = dates.slice(-8);
+  const gaps = [];
+  for (let i = 1; i < recent.length; i++) gaps.push(daysBetween(recent[i-1], recent[i]));
+  const avgGap = gaps.reduce((a,b) => a+b, 0) / gaps.length;
+  const currentGap = daysBetween(dates[dates.length-1], todayStr());
+  if (currentGap >= 3 && currentGap > avgGap * 1.5) {
+    return { currentGap, avgGap: Math.round(avgGap) };
+  }
+  return null;
+}
+function renderUpNextBanner() {
+  const el = document.getElementById("up-next-banner");
+  const textEl = document.getElementById("up-next-text");
+  const switchBtn = document.getElementById("up-next-switch");
+  const suggestion = getSuggestedDay();
+  const nudge = computeAdherenceNudge();
+
+  if (!nudge && (!suggestion || suggestion.day === activeDay)) {
+    el.classList.add("hidden");
+    return;
+  }
+
+  el.classList.toggle("nudge", !!nudge);
+  const suggestedLabel = suggestion ? getDayLabel(suggestion.day) : null;
+  if (nudge) {
+    textEl.textContent = `It's been ${nudge.currentGap} days since your last session (usual ~${nudge.avgGap}).` +
+      (suggestedLabel && suggestion.day !== activeDay ? ` Suggested: ${suggestedLabel}.` : "");
+  } else {
+    const since = suggestion.daysSince == null ? "never trained" : `${suggestion.daysSince} day${suggestion.daysSince===1?"":"s"} ago`;
+    textEl.textContent = `Suggested next: ${suggestedLabel} — last trained ${since}.`;
+  }
+  if (suggestion && suggestion.day !== activeDay) {
+    switchBtn.classList.remove("hidden");
+    switchBtn.onclick = () => selectDay(suggestion.day);
+  } else {
+    switchBtn.classList.add("hidden");
+  }
+  el.classList.remove("hidden");
+}
+
 // ── Last session ──────────────────────────────────────────────────────────────
 function renderLastSession() {
   const overrideLabel = `${activeDay} (Override)`;
@@ -1414,6 +1564,18 @@ function renderLastSession() {
 }
 
 // ── Day buttons ───────────────────────────────────────────────────────────────
+function selectDay(d) {
+  activeDay=d; liveLog={}; liveNote={}; struggleSetAdded={};
+  stopRestTimer();
+  overrideMode=false; overrideExercises=null;
+  clearPersistedOverrideState();
+  const toggle=document.getElementById("override-toggle"); if(toggle) toggle.checked=false;
+  document.querySelector(".override-toggle")?.classList.remove("active");
+  document.getElementById("override-hint")?.classList.add("hidden");
+  document.getElementById("workout-alert").classList.add("hidden");
+  document.getElementById("session-review-box").classList.add("hidden");
+  renderDayButtons(); renderExercises(); renderLastSession(); renderUpNextBanner();
+}
 function renderDayButtons() {
   const container = document.getElementById("day-buttons");
   container.innerHTML = "";
@@ -1424,17 +1586,7 @@ function renderDayButtons() {
     const btn=document.createElement("button");
     btn.className="day-btn"+(d===activeDay?" active":"")+(isFree?" freeball":"");
     btn.textContent= isFree ? "＋ Freeball" : getDayLabel(d);
-    btn.addEventListener("click",()=>{
-      activeDay=d; liveLog={}; liveNote={}; struggleSetAdded={};
-      overrideMode=false; overrideExercises=null;
-      clearPersistedOverrideState();
-      const toggle=document.getElementById("override-toggle"); if(toggle) toggle.checked=false;
-      document.querySelector(".override-toggle")?.classList.remove("active");
-      document.getElementById("override-hint")?.classList.add("hidden");
-      document.getElementById("workout-alert").classList.add("hidden");
-      document.getElementById("session-review-box").classList.add("hidden");
-      renderDayButtons(); renderExercises(); renderLastSession();
-    });
+    btn.addEventListener("click",()=>selectDay(d));
     group.appendChild(btn);
     if (!isFree) {
       const renameBtn = document.createElement("button");
@@ -1541,7 +1693,9 @@ async function saveSession() {
     sessions=parseSessionRows((await sheetsCall({action:"read"})).rows);
     setSyncStatus("synced");
     liveLog={}; liveNote={}; struggleSetAdded={};
+    stopRestTimer();
     clearLocalSession(); // session is saved for real now — the local safety net is no longer needed
+    renderUpNextBanner(); // last-trained dates just changed
     document.getElementById("workout-alert").classList.add("hidden");
 
     // Override session: offer to promote it to a permanent day before resetting.
@@ -2438,9 +2592,17 @@ async function init() {
   renderDayButtons();
   await renderExercises();
   renderLastSession();
+  renderUpNextBanner();
 
   document.getElementById("loading").classList.add("hidden");
   document.getElementById("app").classList.remove("hidden");
 }
 
 init();
+
+// PWA: home-screen install + offline shell caching. Independent of init()'s
+// data load — registers immediately regardless of whether Apps Script is
+// reachable.
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));
+}
