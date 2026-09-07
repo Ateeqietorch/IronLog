@@ -25,15 +25,58 @@ function computeBackoffPct(actualReps, targetReps, rpe) {
   return Math.min(0.25, pct);
 }
 
+// Equipment-realistic load granularity. Dumbbells jump in fixed ~5lb steps
+// at most commercial gyms — there's no such thing as 22.5lb dumbbells, so a
+// computed percentage bump that lands between real increments is a
+// suggestion the user physically cannot execute. Barbells/cables/most
+// machines allow much finer loading (2.5lb plates), so they keep the
+// percentage-based approach.
+function isDumbbellExercise(exName) {
+  const n = (exName || "").toLowerCase();
+  return n.includes("dumbbell") || n.includes("(db)") || ["hammer curl", "concentration curl"].some(k => n.includes(k));
+}
+function getLoadIncrement(exName) {
+  return isDumbbellExercise(exName) ? 5 : 2.5;
+}
+
 // Progression load increment. ACSM guidance: increase load ~2-10% once the
 // full prescribed rep range is met comfortably. A flat lb bump (this app's
 // old approach) isn't proportional — the same +5lb is a rounding error on a
 // 225lb bench and a 25% jump on a 20lb dumbbell curl. Landing near the middle
-// of ACSM's range (5%), floored at 2.5lb since that's the smallest increment
-// most gym plates/dumbbells actually offer — below that floor there's
-// nothing to add even when the math calls for less.
-function computeBumpAmount(weight) {
-  return Math.max(2.5, roundToNearest((weight || 0) * 0.05, 2.5));
+// of ACSM's range (5%) for equipment with fine adjustability. For dumbbells
+// specifically, snap to the real increment instead — a computed percentage
+// often doesn't correspond to a weight that actually exists on the rack.
+function computeBumpAmount(weight, exName) {
+  const increment = getLoadIncrement(exName);
+  if (increment >= 5) return increment;
+  return Math.max(increment, roundToNearest((weight || 0) * 0.05, increment));
+}
+
+// The next working weight after a progression bump. For dumbbells this also
+// snaps the RESULT to the increment grid, not just the delta — the current
+// weight itself may not be a multiple of 5 (an odd starting number, a
+// previous manual entry), and adding a clean +5 to a non-multiple still
+// lands somewhere that isn't a real dumbbell (31 + 5 = 36, which doesn't
+// exist any more than 33.5 does). Rounding the sum to the nearest 5 always
+// lands on an actual rack weight.
+function computeNextWeight(weight, exName) {
+  const w = weight || 0;
+  const bump = computeBumpAmount(w, exName);
+  const increment = getLoadIncrement(exName);
+  return increment >= 5 ? roundToNearest(w + bump, increment) : w + bump;
+}
+
+// How many reps above the nominal top of the range a set can run before a
+// weight jump is forced. For fine-grained equipment, none needed — the next
+// weight is a small, easy step, so jump as soon as the range is met. For
+// dumbbells, the next available weight is a much bigger relative jump (a
+// 20->25lb dumbbell is +25%, not the ~5% ACSM calls a comfortable
+// progression), so it's worth "earning" that jump with a few extra reps of
+// cushion first rather than forcing it the moment the nominal ceiling is
+// touched — exercise-contingent progression: rep-based for coarse equipment,
+// weight-based for fine equipment.
+function effectiveRepCeiling(ex) {
+  return getLoadIncrement(ex.name) >= 5 ? ex.repMax + 2 : ex.repMax;
 }
 
 // Mesocycle / deload constants. MESOCYCLE_WEEKS/DELOAD_DAYS default to a
@@ -558,8 +601,12 @@ function computeTarget(ex, history, meso) {
   const medReps   = Math.round(median(valid.map(r => parseFloat(r.reps))));
   const rpeVals   = valid.map(r => parseFloat(r.rpe)).filter(v => !isNaN(v));
   const medRPE    = rpeVals.length ? median(rpeVals) : null;
-  const hitRatio  = valid.filter(r => parseFloat(r.reps) >= ex.repMax).length / valid.length;
-  const bump      = computeBumpAmount(medWeight);
+  // For coarse-increment equipment (dumbbells), the rep ceiling that "earns"
+  // a weight jump is extended a couple reps past the nominal range — see
+  // effectiveRepCeiling(). For everything else this equals ex.repMax exactly,
+  // so behavior is unchanged.
+  const repCeiling = effectiveRepCeiling(ex);
+  const hitRatio  = valid.filter(r => parseFloat(r.reps) >= repCeiling).length / valid.length;
   // Some sets failed outright (0 reps) even though others were valid — treat
   // as a full miss for backoff severity, same as the all-failed branch above.
   const backoff   = failed.length ? { weight: roundToNearest(medWeight * (1 - computeBackoffPct(0, ex.repMin, medRPE)), 2.5), reps: ex.repMin } : null;
@@ -576,7 +623,7 @@ function computeTarget(ex, history, meso) {
   // was supposed to) and reps were already near the top of the range —
   // progress now rather than waiting to grind out one more rep at a time.
   const midTargetRPE = targetRPEForSet(Math.floor((ex.sets - 1) / 2), ex.sets, false);
-  const undershotEffort = medRPE !== null && medRPE <= midTargetRPE - 1 && medReps >= ex.repMax - 1;
+  const undershotEffort = medRPE !== null && medRPE <= midTargetRPE - 1 && medReps >= repCeiling - 1;
 
   // An AI-applied "hold" adjustment caps progression at maintain, even if
   // the numbers alone would say to bump — used when the review flagged this
@@ -584,7 +631,7 @@ function computeTarget(ex, history, meso) {
   const holding = adjustment && adjustment.holdVolume;
 
   if (!holding && (hitRatio >= 0.75 || undershotEffort)) {
-    const weight = medWeight + bump;
+    const weight = computeNextWeight(medWeight, ex.name);
     return { weight, reps: ex.repMin, e1rm: calcE1RM(weight, ex.repMin), reason: "progress", backoff };
   }
 
@@ -595,7 +642,11 @@ function computeTarget(ex, history, meso) {
     return { weight: medWeight, reps: medReps, e1rm: calcE1RM(medWeight, medReps), reason: "hold", backoff };
   }
 
-  const targetReps = holding ? medReps : Math.min(medReps + 1, ex.repMax);
+  // Reps can climb up to repCeiling before the exercise falls back to the
+  // "hit ratio" branch above and jumps weight — the actual rep-based
+  // progression lever for coarse-increment (dumbbell) exercises that can't
+  // cleanly progress by weight every session.
+  const targetReps = holding ? medReps : Math.min(medReps + 1, repCeiling);
   return { weight: medWeight, reps: targetReps, e1rm: calcE1RM(medWeight, targetReps), reason: holding ? "hold" : "maintain", backoff };
 }
 
@@ -617,11 +668,12 @@ function computeTargetPerSet(ex, setIndex, history) {
     }
   }
 
-  const bump = computeBumpAmount(lastWeight);
-  if (lastReps >= ex.repMax) {
-    return { weight: lastWeight + bump, reps: ex.repMin, e1rm: calcE1RM(lastWeight + bump, ex.repMin), reason: "progress" };
+  const repCeiling = effectiveRepCeiling(ex);
+  if (lastReps >= repCeiling) {
+    const weight = computeNextWeight(lastWeight, ex.name);
+    return { weight, reps: ex.repMin, e1rm: calcE1RM(weight, ex.repMin), reason: "progress" };
   }
-  const targetReps = Math.min(lastReps + 1, ex.repMax);
+  const targetReps = Math.min(lastReps + 1, repCeiling);
   return { weight: lastWeight, reps: targetReps, e1rm: calcE1RM(lastWeight, targetReps), reason: "maintain" };
 }
 
