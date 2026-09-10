@@ -501,7 +501,7 @@ function recentExerciseHistory(ss, exerciseName, limit) {
     const [rawDate, day, exercise, set, weight, reps, notes, sessionKey, rpe, completed] = allRows[i];
     if (exercise !== exerciseName) continue;
     if (!bySession[sessionKey]) bySession[sessionKey] = { date: cleanDate(rawDate), rows: [] };
-    bySession[sessionKey].rows.push({ set, weight, reps, rpe, completed });
+    bySession[sessionKey].rows.push({ set, weight, reps, rpe, completed, notes });
   }
   const sessions = Object.values(bySession).sort((a, b) => b.date.localeCompare(a.date)).slice(0, limit || 5);
   return sessions.map(s => {
@@ -509,7 +509,8 @@ function recentExerciseHistory(ss, exerciseName, limit) {
       .sort((a, b) => a.set - b.set)
       .map(r => "S" + r.set + " " + r.weight + "x" + r.reps + (r.rpe ? " RPE" + r.rpe : "") + (String(r.completed) === "0" ? " (manual)" : ""))
       .join(", ");
-    return s.date + ": " + sets;
+    const note = s.rows.map(r => r.notes).find(n => n && String(n).trim());
+    return s.date + ": " + sets + (note ? " — note: " + String(note).trim() : "");
   }).join("\n");
 }
 
@@ -522,7 +523,7 @@ function recentDayHistoryExcluding(ss, day, excludeKey, limit) {
     const [rawDate, rowDay, exercise, set, weight, reps, notes, sessionKey, rpe, completed] = allRows[i];
     if ((rowDay !== day && rowDay !== overrideLabel) || String(sessionKey) === String(excludeKey)) continue;
     if (!bySession[sessionKey]) bySession[sessionKey] = { date: cleanDate(rawDate), rows: [] };
-    bySession[sessionKey].rows.push({ exercise, set, weight, reps, rpe, completed });
+    bySession[sessionKey].rows.push({ exercise, set, weight, reps, rpe, completed, notes });
   }
   const sessions = Object.values(bySession).sort((a, b) => b.date.localeCompare(a.date)).slice(0, limit || 3);
   return sessions.map(s => s.date + ":\n" + formatRowsForReview(null, s.rows)).join("\n\n");
@@ -553,17 +554,21 @@ function recentAbCoreCheck(ss, windowDays) {
   return `Not recently — last was ${lastName} on ${lastDate} (${daysSince} days ago).`;
 }
 
-// Formats either raw sheet rows (from Sheet1) or {exercise,set,weight,reps,rpe,completed}
+// Formats either raw sheet rows (from Sheet1) or {exercise,set,weight,reps,rpe,completed,notes}
 // objects into a compact per-exercise text block for the AI prompt. A set logged
 // without the "hit target" checkbox is tagged (manual) — a cheap signal for
-// the review to notice a missed-sets pattern.
+// the review to notice a missed-sets pattern. Notes were previously destructured
+// here and then silently dropped — the per-exercise notes field (form cues, how
+// it felt) never actually reached any AI prompt despite being saved to the
+// sheet every session and despite the ai_review prompt already assuming it had
+// this ("form is breaking down per the notes"). Now included once per exercise.
 function formatRowsForReview(rawRows, objRows) {
   const byExercise = {};
   if (rawRows) {
     rawRows.forEach(row => {
       const [rawDate, day, exercise, set, weight, reps, notes, sessionKey, rpe, completed] = row;
       if (!byExercise[exercise]) byExercise[exercise] = [];
-      byExercise[exercise].push({ set, weight, reps, rpe, completed });
+      byExercise[exercise].push({ set, weight, reps, rpe, completed, notes });
     });
   } else {
     (objRows || []).forEach(r => {
@@ -576,6 +581,7 @@ function formatRowsForReview(rawRows, objRows) {
       .sort((a, b) => a.set - b.set)
       .map(s => "S" + s.set + " " + s.weight + "x" + s.reps + (s.rpe ? " RPE" + s.rpe : "") + (String(s.completed) === "0" ? " (manual)" : ""))
       .join(", ");
-    return name + ": " + setsStr;
+    const note = sets.map(s => s.notes).find(n => n && String(n).trim());
+    return name + ": " + setsStr + (note ? " — note: " + String(note).trim() : "");
   }).join("\n");
 }
