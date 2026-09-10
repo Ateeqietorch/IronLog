@@ -714,7 +714,7 @@ if(!exercises[FREEBALL_DAY]) exercises[FREEBALL_DAY] = [];
 let sessions    = {};
 let progHist    = [];
 let bwData      = [];
-let dayHistory  = {}; // cache: { dayKey: [sessions newest first] }
+let allHistoryCache = null; // cache: [sessions newest first], ACROSS all days/overrides — see loadAllHistory()
 let activeDay   = DAYS[0];
 let sessDate    = todayStr();
 let liveLog     = {}; // { exIdx: { sets: [{weight,reps,weightL,repsL,weightR,repsR,hit}] } }
@@ -843,21 +843,23 @@ function sessionToRows(sess) {
   return rows;
 }
 
-// ── Load day history ──────────────────────────────────────────────────────────
-// Built from the already-loaded `sessions` state rather than a network call, so
-// it also picks up "{day} (Override)" sessions — exercise history is tracked by
-// exercise name regardless of whether it was logged in an override session.
-async function loadDayHistory(day) {
-  if (dayHistory[day]) return dayHistory[day];
-  const overrideLabel = `${day} (Override)`;
+// ── Load exercise history (global, cross-day) ────────────────────────────────
+// Progression is tracked per EXERCISE, never per "day" — the muscle doesn't
+// know or care what you called the session it was worked in. Built from
+// ALL logged sessions regardless of day or override status; computeTarget/
+// getSetHistory/bestRecentE1RM filter by exercise NAME downstream, so the
+// same exercise logged under its normal day, an override of some other day,
+// or Freeball all feed one continuous progression trend.
+async function loadAllHistory() {
+  if (allHistoryCache) return allHistoryCache;
   const rows = Object.values(sessions)
-    .filter(s => s.day === day || s.day === overrideLabel)
     .sort((a,b) => b.date.localeCompare(a.date))
-    .slice(0, 10)
+    .slice(0, 60)
     .map(s => ({ date: s.date, rows: sessionToRows(s) }));
-  dayHistory[day] = rows;
+  allHistoryCache = rows;
   return rows;
 }
+function invalidateHistoryCache() { allHistoryCache = null; }
 
 // Get per-set history for an exercise across past sessions
 function getSetHistory(history, exName, setIndex) {
@@ -1175,8 +1177,8 @@ async function renderExercises() {
   const container = document.getElementById("exercises-list");
   container.innerHTML = '<div style="font-size:10px;color:#444;padding:8px 0">Loading history...</div>';
 
-  // Load history for this day
-  const history = await loadDayHistory(activeDay);
+  // Progression history — global across all days, not scoped to activeDay.
+  const history = await loadAllHistory();
 
   container.innerHTML = "";
   if (!curEx.length) {
@@ -1746,8 +1748,8 @@ async function saveSession() {
   const curEx=activeExArray()||[];
   const cleanSessDate=sessDate.slice(0,10);
   // Override sessions are tagged in the Day column so they're distinguishable in
-  // the sheet/calendar, but exercise history is still tracked by exercise name —
-  // loadDayHistory() matches both the plain and "(Override)" day label.
+  // the sheet/calendar, but exercise history is tracked by exercise name alone,
+  // globally — loadAllHistory() doesn't filter by day at all.
   const dayLabel = overrideMode ? `${activeDay} (Override)` : activeDay;
   const sessionKey=`${cleanSessDate}_${dayLabel}`;
   const rows=[]; let hasData=false;
@@ -1781,7 +1783,7 @@ async function saveSession() {
     // Progression: compare the double-progression target computed from history
     // before vs. after this session, and feed the result back into the exercise
     // by NAME in the permanent program — even when logged via an override.
-    const priorHistory = dayHistory[activeDay] || [];
+    const priorHistory = await loadAllHistory();
     const savedMeso = getMesocycleState();
     const changes=[];
     curEx.forEach((ex,i)=>{
@@ -1826,8 +1828,9 @@ async function saveSession() {
     await sheetsCall({ action:"clear_draft", draftKey:dk }).catch(()=>{});
     lsSet("il:draftKey",null);
 
-    // Invalidate day history cache so next load is fresh
-    delete dayHistory[activeDay];
+    // Invalidate history cache so next load picks up this just-saved session —
+    // the whole cache, not just this day, since it's no longer day-scoped.
+    invalidateHistoryCache();
 
     sessions=parseSessionRows((await sheetsCall({action:"read"})).rows);
     setSyncStatus("synced");
@@ -2001,8 +2004,8 @@ function openSwapModal(idx) {
   document.getElementById("swap-replacing").textContent="Replacing: "+ex.name;
   document.getElementById("swap-manual-form").classList.add("hidden");
   document.getElementById("swap-modal").classList.remove("hidden");
-  // source e1RM for estimation
-  const srcE1RM = bestRecentE1RM(dayHistory[activeDay]||[], ex.name);
+  // source e1RM for estimation — global history, not scoped to activeDay
+  const srcE1RM = bestRecentE1RM(allHistoryCache||[], ex.name);
   document.getElementById("swap-from-library").onclick=()=>{
     document.getElementById("swap-modal").classList.add("hidden");
     openRepoModal(chosen=>{
