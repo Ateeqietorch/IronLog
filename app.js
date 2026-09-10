@@ -1908,16 +1908,30 @@ async function saveSession() {
     renderUpNextBanner(); // last-trained dates just changed
     document.getElementById("workout-alert").classList.add("hidden");
 
-    // Override session: offer to promote it to a permanent day before resetting.
+    // Override session: an override NEVER touches the permanent program
+    // automatically (by design — see activeExArray() above), which means
+    // toggling "Override Today" again next time copies from whatever the
+    // permanent list still is, NOT what was actually done last time. Left
+    // unresolved, that silently discards the override's exercise
+    // substitutions every single time, and progression for those swapped-in
+    // exercises then looks "unrepresentative" — the app isn't actually
+    // ignoring real history, it's just being handed a different exercise
+    // (the stale permanent one) to look up. Offer to make it stick to THIS
+    // day, before falling back to "spin off a separate new day."
     let extraMsg = "";
     if (overrideMode) {
       const savedOverrideEx = overrideExercises;
+      const overriddenDay = activeDay;
       overrideMode=false; overrideExercises=null;
       clearPersistedOverrideState();
       const toggle=document.getElementById("override-toggle"); if(toggle) toggle.checked=false;
       document.querySelector(".override-toggle")?.classList.remove("active");
       document.getElementById("override-hint")?.classList.add("hidden");
-      if (confirm("Save this as a new permanent training day?")) {
+      if (confirm(`Make these changes permanent for ${getDayLabel(overriddenDay)} (instead of a one-time override)?`)) {
+        exercises[overriddenDay] = JSON.parse(JSON.stringify(savedOverrideEx));
+        lsSet("il:exercises", exercises);
+        extraMsg = ` — ${getDayLabel(overriddenDay)} updated permanently`;
+      } else if (confirm("Save as a separate NEW training day instead?")) {
         let name = (prompt('Name for this new day (e.g. "Day 6 — Arms"):', "") || "").trim();
         if (name) {
           if (exercises[name] || DAYS.includes(name) || customDays.includes(name)) {
