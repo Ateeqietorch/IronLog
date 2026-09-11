@@ -5,6 +5,7 @@ const DOW = ["Su","Mo","Tu","We","Th","Fr","Sa"];
 
 // Science-based constants
 const STRUGGLE_THRESHOLD  = 0.15; // 15% below target reps on set 1 — no specific study pins this number; RPE (below) is the primary struggle signal, this is a secondary reps-based catch
+const REP_FLOOR           = 3;    // hard floor for the descending-reps-across-sets calc below — never target fewer than this regardless of how far target RPE has climbed
 const STAGNATION_SESSIONS = 3;    // consecutive sessions same e1RM = stagnant
 const PERF_LOSS_SESSIONS  = 2;    // consecutive drops in e1RM = declining
 const MEV_SETS            = 10;   // fallback minimum effective volume per muscle/week
@@ -1238,7 +1239,19 @@ async function renderExercises() {
       if (highFatigue && target.reps < upperHalfReps) {
         target = { ...target, reps: upperHalfReps, e1rm: calcE1RM(target.weight, upperHalfReps) };
       }
-      target = { ...target, targetRPE: targetRPEForSet(si, ex.sets, meso.inDeload) };
+      const thisRPE = targetRPEForSet(si, ex.sets, meso.inDeload);
+      // Bilateral exercises hold ONE weight across all sets, but reps at that
+      // weight aren't static — asking for climbing RPE while displaying an
+      // unchanged rep target is physiologically incoherent (the whole reason
+      // RPE climbs to 9.5 by the last set is that fewer reps are left at that
+      // weight). Anchored to set 1's number via the RPE->RIR relationship
+      // already used for e1RM elsewhere in this app, not a separate model.
+      if (!ex.unilateral) {
+        const baseRPE = targetRPEForSet(0, ex.sets, meso.inDeload);
+        const declinedReps = Math.max(REP_FLOOR, Math.round(target.reps - (thisRPE - baseRPE)));
+        target = { ...target, reps: declinedReps, e1rm: calcE1RM(target.weight, declinedReps) };
+      }
+      target = { ...target, targetRPE: thisRPE };
       const analysis = analyseSetHistory(setHist);
       setTargets.push(target);
       renderedTargets[i][si] = { weight: target.weight, reps: target.reps, targetRPE: target.targetRPE };

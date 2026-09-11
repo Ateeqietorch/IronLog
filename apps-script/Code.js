@@ -190,7 +190,11 @@ function doGet(e) {
       if (!sessionRows.length) return respond({ ok: false, msg: "session not found: " + sessionKey });
 
       const sessionLog = formatRowsForReview(sessionRows);
-      const priorLog    = recentDayHistoryExcluding(ss, day, sessionKey, 3);
+      // 5 prior sessions (not 3) — the deload call now explicitly requires
+      // seeing a 3-4 session pattern across several exercises; 3 prior + the
+      // just-completed one left no real margin to distinguish a genuine
+      // trend from noise.
+      const priorLog    = recentDayHistoryExcluding(ss, day, sessionKey, 5);
       const abCoreStatus = recentAbCoreCheck(ss, 14);
 
       const system = "You are a hypertrophy-training coach reviewing a just-completed workout logged in IronLog, " +
@@ -203,9 +207,16 @@ function doGet(e) {
         "program (no tracked exercise for it), but if it hasn't been done in the last 14 days, briefly mention " +
         "it's worth adding a couple sets somewhere — this is a plain-text suggestion only, never a structured " +
         "adjustment (never put it in \"adjustments\", which is for HOLDING an existing programmed exercise). " +
-        "Separately, decide: (1) should training deload soon — only " +
-        "recommend this for a clear, sustained pattern (RPE pinned near failure across multiple sessions, " +
-        "stalling/declining performance on multiple exercises), not from one hard session; (2) for any exercise " +
+        "Separately, decide: (1) should training deload soon — a deload is a significant, disruptive intervention " +
+        "applied across the ENTIRE program (cuts working weight, cuts volume, caps effort everywhere), so the bar " +
+        "is high and it needs broad evidence, not a read on one exercise. You only see this one day's recent " +
+        "history, so only recommend it when SEVERAL DIFFERENT exercises on this day each show a genuinely " +
+        "sustained pattern over at least 3-4 sessions — RPE consistently pinned near failure, or e1RM/reps " +
+        "actually trending down, not just flat. Two sessions of similar numbers on ONE exercise is normal " +
+        "week-to-week variance (sleep, stress, a slightly different pump), not stagnation — do not recommend a " +
+        "deload from that; if one exercise specifically needs to back off, that's a HOLD (below), not a deload. " +
+        "When genuinely unsure whether the pattern is real or noise, default to NOT recommending it — a missed " +
+        "deload costs nothing, an unwarranted one discards real progress across the whole program. (2) for any exercise " +
         "that should HOLD at its current weight/reps next time rather than progress (e.g. it's clearly grinding, " +
         "form is breaking down per the notes, or it just took a big jump and needs a session to stabilize) — most " +
         "exercises most sessions should NOT be flagged, only genuinely warranted ones. Never suggest Barbell Back " +
