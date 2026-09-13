@@ -657,6 +657,15 @@ function computeTarget(ex, history, meso) {
     }
   }
 
+  // Current strength estimate from last session's actual weight/reps/RPE —
+  // feeds the e1RM inversion below so a weight bump lands on a rep count
+  // that actually preserves the target RIR at the new load, instead of
+  // always resetting to repMin (which meant the steady state of every
+  // exercise was "climb to the top of the range, get knocked back to the
+  // floor, repeat" — a large share of your training life at the bottom of
+  // the rep range by construction, not by performance).
+  const estE1RM = medRPE !== null ? calcE1RM_RPE(medWeight, medReps, medRPE) : calcE1RM(medWeight, medReps);
+
   // Autoregulated double progression: last session's actual RPE undershot
   // the descending target by a full point+ (it felt clearly easier than it
   // was supposed to) and reps were already near the top of the range —
@@ -672,19 +681,24 @@ function computeTarget(ex, history, meso) {
       // reset to repMin — only the ladder set itself uses the new weight.
       const nextW = computeNextWeight(medWeight, ex.name);
       return {
-        weight: medWeight, reps: repCeiling, e1rm: calcE1RM(medWeight, repCeiling), reason: "hold", backoff,
+        weight: medWeight, reps: repCeiling, e1rm: calcE1RM(medWeight, repCeiling), reason: "hold", backoff, estE1RM,
         ladderOverride: { weight: nextW, reps: ex.repMin, e1rm: calcE1RM(nextW, ex.repMin) }
       };
     }
     const weight = computeNextWeight(medWeight, ex.name);
-    return { weight, reps: ex.repMin, e1rm: calcE1RM(weight, ex.repMin), reason: "progress", backoff };
+    // Invert the strength estimate at the NEW weight and set-1's target RIR
+    // rather than resetting to repMin — a ~5% bump usually still leaves you
+    // well above the bottom of the range, which is the whole point.
+    const setOneRIR = 10 - targetRPEForSet(0, ex.sets, false);
+    const projectedReps = Math.max(ex.repMin, Math.min(ex.repMax, Math.round((estE1RM / weight - 1) * 30 - setOneRIR)));
+    return { weight, reps: projectedReps, e1rm: calcE1RM(weight, projectedReps), reason: "progress", backoff, estE1RM };
   }
 
   // Overshot effort: already grinding at/above target RPE despite not
   // reaching the top of the rep range — hold rather than push reps further
   // into fatigue that wasn't part of the plan.
   if (medRPE !== null && medRPE >= 9.5) {
-    return { weight: medWeight, reps: medReps, e1rm: calcE1RM(medWeight, medReps), reason: "hold", backoff };
+    return { weight: medWeight, reps: medReps, e1rm: calcE1RM(medWeight, medReps), reason: "hold", backoff, estE1RM };
   }
 
   // Reps can climb up to repCeiling before the exercise falls back to the
@@ -692,7 +706,7 @@ function computeTarget(ex, history, meso) {
   // progression lever for coarse-increment (dumbbell) exercises that can't
   // cleanly progress by weight every session.
   const targetReps = holding ? medReps : Math.min(medReps + 1, repCeiling);
-  return { weight: medWeight, reps: targetReps, e1rm: calcE1RM(medWeight, targetReps), reason: holding ? "hold" : "maintain", backoff };
+  return { weight: medWeight, reps: targetReps, e1rm: calcE1RM(medWeight, targetReps), reason: holding ? "hold" : "maintain", backoff, estE1RM };
 }
 
 // Legacy per-set-index target logic, kept ONLY for unilateral exercises. Their
@@ -1304,19 +1318,36 @@ async function renderExercises() {
       // weight aren't static — asking for climbing RPE while displaying an
       // unchanged rep target is physiologically incoherent (the whole reason
       // RPE climbs to 9.5 by the last set is that fewer reps are left at that
-      // weight). Anchored to set 1's number via the RPE->RIR relationship
-      // already used for e1RM elsewhere in this app, not a separate model.
+      // weight). Reps at each set's target RPE are estimated by inverting the
+      // athlete's current e1RM (same RPE->RIR relationship used for e1RM
+      // elsewhere in this app), shown as a range rather than a hard ceiling,
+      // and the final set is an open AMRAP instead of a number at all.
       // Skipped for the ladder set — its low rep target is a deliberate,
       // fixed test number, not a point on the ascending-effort curve.
       if (!ex.unilateral && !target.isLadder) {
-        const baseRPE = targetRPEForSet(0, ex.sets, meso.inDeload);
-        const declinedReps = Math.max(REP_FLOOR, Math.round(target.reps - (thisRPE - baseRPE)));
-        target = { ...target, reps: declinedReps, e1rm: calcE1RM(target.weight, declinedReps) };
+        const isLastSet = si === ex.sets - 1;
+        if (isLastSet && !meso.inDeload) {
+          // Terminal AMRAP: don't prescribe a rep number on the last set at
+          // all — printing a declining target turned an expected fatigue
+          // outcome into a ceiling (set 4 at "5 reps" got logged as 5 even
+          // when the honest answer at that RPE was 7). Let fatigue show up
+          // in what actually gets logged, and use it as the session's
+          // cleanest e1RM read (closest to true failure).
+          target = { ...target, isAMRAP: true, repFloor: Math.max(REP_FLOOR, ex.repMin - 2) };
+        } else if (target.estE1RM && target.weight > 0) {
+          // Model-based expectation — invert the athlete's current e1RM
+          // estimate at this set's fixed weight and ascending target RPE —
+          // rather than subtracting an arbitrary rep count from set 1's
+          // number. Shown as a range, not a single ceiling.
+          const rir = 10 - thisRPE;
+          const expected = Math.max(REP_FLOOR, Math.round((target.estE1RM / target.weight - 1) * 30 - rir));
+          target = { ...target, reps: expected, repLow: Math.max(REP_FLOOR, expected - 1), repHigh: expected + 2, e1rm: calcE1RM(target.weight, expected) };
+        }
       }
       target = { ...target, targetRPE: thisRPE };
       const analysis = analyseSetHistory(setHist);
       setTargets.push(target);
-      renderedTargets[i][si] = { weight: target.weight, reps: target.reps, targetRPE: target.targetRPE, isLadder: !!target.isLadder };
+      renderedTargets[i][si] = { weight: target.weight, reps: target.reps, targetRPE: target.targetRPE, isLadder: !!target.isLadder, isAMRAP: !!target.isAMRAP, repFloor: target.repFloor, repLow: target.repLow, repHigh: target.repHigh };
       setStatuses.push(analysis);
     }
 
@@ -1370,9 +1401,11 @@ async function renderExercises() {
         const curR = cur?.reps || "";
         const curRpe = cur?.rpe || "";
         const e1rmNow = curW && curR ? calcE1RM_RPE(parseFloat(curW), parseFloat(curR), curRpe) : 0;
+        const repDisplay = target.isAMRAP ? `${target.repFloor}+` : (target.repLow != null ? `${target.repLow}–${target.repHigh}` : target.reps);
+        const amrapTag = target.isAMRAP ? ' <span class="target-amrap" title="Last set — go to your target RPE, log whatever you actually get">AMRAP</span>' : "";
         setsHTML += `<div class="set-row${target.isLadder ? " ladder" : ""}" style="margin-bottom:6px">
           <div class="set-num">S${si+1}${target.isLadder ? ' <span class="ladder-badge" title="Testing the next dumbbell size — the rest of your sets stay at the current weight">🪜</span>' : ""}</div>
-          <div class="set-target">→ <span class="target-val">${target.weight}lb × ${target.reps}</span> <span class="target-rpe">@RPE${target.targetRPE}</span></div>
+          <div class="set-target">→ <span class="target-val">${target.weight}lb × ${repDisplay}</span>${amrapTag} <span class="target-rpe">@RPE${target.targetRPE}</span></div>
           <input type="number" class="set-w" data-ex="${i}" data-set="${si}" placeholder="lb" value="${curW}" />
           <input type="number" class="set-r" data-ex="${i}" data-set="${si}" placeholder="reps" value="${curR}" />
           <input type="number" class="set-rpe" data-ex="${i}" data-set="${si}" placeholder="RPE" min="1" max="10" step="0.5" value="${curRpe}" title="Rate of Perceived Exertion 1–10" />

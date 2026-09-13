@@ -68,7 +68,7 @@ Progression for an exercise pulls from **all** logged sessions across every day,
 1. Take the most recent session with data for this exercise.
 2. Compute the **median** weight and median reps across that session's valid sets (median, not average or "last set," so one outlier set doesn't skew the target).
 3. Compute a **hit ratio**: the fraction of sets that reached the rep ceiling (see below).
-4. **If ≥75% of sets hit the ceiling** (or an "undershot effort" fast-track applies — see below): bump the weight and reset reps to `repMin`.
+4. **If ≥75% of sets hit the ceiling** (or an "undershot effort" fast-track applies — see below): bump the weight, then project the new starting rep count by inverting the athlete's current e1RM estimate at the new weight and set-1's target RIR — clamped to `[repMin, repMax]` — rather than always resetting to `repMin`. A ~5% bump usually still leaves several reps above the bottom of the range; resetting unconditionally meant the steady state of every exercise was "climb to the ceiling, get knocked back to the floor, repeat."
 5. **Otherwise:** hold the weight, and let reps climb by 1 (capped at the ceiling).
 6. A session with **zero valid sets** for this exercise last time: back off from the program weight.
 7. A session with **some failed sets** (weight logged, 0 reps — abandoned): flags a "back-off" alert with a suggested reduced weight, using severity-scaled logic (see below).
@@ -80,8 +80,12 @@ Progression for an exercise pulls from **all** logged sessions across every day,
 ### Unilateral exercises
 Tracked per-set-index independently (`computeTargetPerSet`) rather than via a single median across all sets, since their weight/reps are stored as `L:x/R:y` strings that don't fit the same math. Each set index (S1, S2, S3...) has its own progression thread.
 
-### Descending reps within a session
-A bilateral exercise's target RPE climbs across its sets (7.5 → 9.5, see §5), but the *weight* stays fixed for all sets. Since fewer reps are achievable at a fixed weight as target effort climbs, the **displayed rep target also declines** across sets — anchored to set 1's number via the same RPE↔RIR relationship used for e1RM elsewhere (`calcE1RM_RPE`), roughly 1 fewer rep per RPE point above the set-1 baseline, floored at 3 reps. This was added specifically to fix an earlier flaw where every set showed an identical rep target despite climbing effort — physiologically incoherent, and it made ordinary fatigue-driven low-rep sets look like anomalies.
+### Rep ranges + terminal AMRAP within a session
+A bilateral exercise's target RPE climbs across its sets (7.5 → 9.5, see §5), but the *weight* stays fixed for all sets. Fewer reps are achievable at a fixed weight as target effort climbs, so each non-final set displays a **rep range**, not a single number: the athlete's current e1RM estimate (`calcE1RM_RPE` off last session's median weight/reps/RPE) is inverted at that set's fixed weight and target RPE to get an expected rep count, shown as `[expected−1, expected+2]`, floored at 3 reps. The **last set of every exercise is an open AMRAP** ("N+" — go to the target RPE, log whatever you actually get) instead of a prescribed number at all.
+
+This replaced an earlier version that printed a single declining number as the target for every set. That was a correct *description* of what happens physiologically (fewer reps are left as effort climbs) but an incorrect *prescription*: it converted an expected outcome into a ceiling, so a set that was honestly good for 7 reps at that RPE got logged as the printed "5" instead. A range plus an open-ended final set lets fatigue show up in what actually gets logged rather than pre-empting it — and the AMRAP set doubles as the session's cleanest e1RM read, closest to true failure.
+
+Brand-new exercises (no history yet, or coming off a deload/backoff) have no e1RM estimate to invert, so non-final sets fall back to a flat `repMin` target with no range — deliberately conservative until there's real data to model from.
 
 ### Rep ceiling: fixed vs. equipment-aware
 For most exercises, the "ceiling" that triggers a weight bump is just `repMax`. For **dumbbell exercises** specifically (`isDumbbellExercise()` — anything with "dumbbell," "(DB)," or matching Hammer Curl/Concentration Curl), the ceiling is extended by 2 reps past `repMax` (`effectiveRepCeiling()`). Rationale: the next dumbbell size is a much bigger relative jump (20→25lb is +25%) than the next barbell plate (~5%), so it's worth "earning" that jump with extra rep volume first rather than forcing it the moment the nominal range is touched.
