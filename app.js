@@ -584,17 +584,55 @@ function setAiAdjustment(exName, adj) {
 }
 function clearAiAdjustment(exName) { setAiAdjustment(exName, null); }
 
-// Ramps each muscle group's total weekly hard-set count from MEV toward MRV
-// across the mesocycle (research: add ~1-2 sets/muscle/week toward MRV, then
-// deload). Applied once per week/deload TRANSITION rather than every render,
-// so it doesn't fight with a manual +/- adjustment mid-week. Mutates the
-// PERMANENT program across every day (a muscle group can span multiple
-// training days) and persists like any other program edit.
+// Post-session subjective per-muscle feedback — the mechanism that lets
+// volume progression respond to the athlete instead of a calendar. Two
+// factors per RP's published set-progression algorithm (GAP-ANALYSIS.md
+// §1.6): soreness recovery (1=fully recovered before this session even
+// happened .. 4=still sore) and performance vs last time training this
+// muscle (1=exceeded targets easily .. 4=couldn't match last session).
+// Stored locally like every other piece of coaching state (mesocycle, AI
+// adjustments, landmarks) — this describes training, it isn't a session
+// log, so it doesn't belong in the Sheet.
+function getMuscleFeedback(group) {
+  const store = lsGet("il:muscleFeedback", {});
+  return store[group] || null;
+}
+function setMuscleFeedback(group, soreness, performance) {
+  const store = lsGet("il:muscleFeedback", {});
+  store[group] = { soreness, performance, loggedAt: Date.now() };
+  lsSet("il:muscleFeedback", store);
+}
+
+// RP's two-factor rule, collapsed to the whole-set delta to apply this week:
+//   soreness 1 + performance 1            -> add 2 (their range is "2-3"; the
+//                                             conservative end, consistent
+//                                             with this app's other literature
+//                                             -> practice translations)
+//   soreness <=2 AND performance <=2       -> add 1
+//   performance 4 (couldn't match at all)  -> pull back 1, treat as a
+//                                             mini recovery signal for the muscle
+//   otherwise (still sore and/or struggled) -> hold
+// Returns null when there's no feedback yet — the caller holds volume rather
+// than guessing, which is the whole point of retiring the calendar ramp.
+function volumeDeltaFromFeedback(fb) {
+  if (!fb) return null;
+  if (fb.performance === 4) return -1;
+  if (fb.soreness === 1 && fb.performance === 1) return 2;
+  if (fb.soreness <= 2 && fb.performance <= 2) return 1;
+  return 0;
+}
+
+// Adjusts each muscle group's total weekly hard-set count from per-muscle
+// subjective feedback (see above), applied at most once per feedback
+// submission so it doesn't reapply every render. Deload set-cuts remain a
+// separate, calendar/fatigue-triggered mechanism (the mesocycle engine's
+// job, not a per-muscle read) and are unchanged. Mutates the PERMANENT
+// program across every day (a muscle group can span multiple training days)
+// and persists like any other program edit.
 function applyVolumeRamp(meso) {
   const rampState = lsGet("il:volumeRamp", {});
-  const key = meso.inDeload ? "deload" : "w" + meso.weekNum;
-  if (rampState.lastKey === key) return; // already ramped for this state
-  const wasInDeload = rampState.lastKey === "deload";
+  const wasInDeload = rampState.deloadActive === true;
+  rampState.groups = rampState.groups || {};
   let changed = false;
 
   MUSCLE_GROUPS.forEach(group => {
@@ -625,24 +663,41 @@ function applyVolumeRamp(meso) {
       changed = true;
     }
 
-    const weeklyTarget = Math.round(mev + (mrv - mev) * Math.min(meso.weekNum, MESOCYCLE_WEEKS) / MESOCYCLE_WEEKS);
+    const fb = getMuscleFeedback(group);
+    const consumed = rampState.groups[group]?.consumedAt;
+    if (!fb || consumed === fb.loggedAt) return; // no new feedback -> hold, don't guess
+
+    const delta = volumeDeltaFromFeedback(fb);
+    rampState.groups[group] = { consumedAt: fb.loggedAt };
+    if (!delta) return;
+
     let currentTotal = entries.reduce((sum, ex) => sum + ex.sets, 0);
     let guard = 0;
-    while (currentTotal < weeklyTarget && guard < 20) {
-      const candidate = entries
-        .filter(ex => ex.sets < (ex._rampBase ?? ex.sets) + 3) // cap how far any one exercise can balloon
-        .sort((a, b) => a.sets - b.sets)[0];
-      if (!candidate) break;
-      if (candidate._rampBase == null) candidate._rampBase = candidate.sets;
-      candidate.sets++;
-      currentTotal++;
+    while (guard < Math.abs(delta)) {
+      if (delta > 0) {
+        if (currentTotal >= mrv) break;
+        const candidate = entries
+          .filter(ex => ex.sets < (ex._rampBase ?? ex.sets) + 3) // cap how far any one exercise can balloon
+          .sort((a, b) => a.sets - b.sets)[0];
+        if (!candidate) break;
+        if (candidate._rampBase == null) candidate._rampBase = candidate.sets;
+        candidate.sets++;
+        currentTotal++;
+      } else {
+        if (currentTotal <= mev) break;
+        const candidate = entries.filter(ex => ex.sets > 1).sort((a, b) => b.sets - a.sets)[0];
+        if (!candidate) break;
+        candidate.sets--;
+        currentTotal--;
+      }
       changed = true;
       guard++;
     }
   });
 
+  rampState.deloadActive = meso.inDeload;
   if (changed) lsSet("il:exercises", exercises);
-  lsSet("il:volumeRamp", { lastKey: key });
+  lsSet("il:volumeRamp", rampState);
 }
 
 // Session-tab banner explaining the current mesocycle week or an active deload.
@@ -1932,6 +1987,7 @@ function selectDay(d) {
   document.getElementById("override-hint")?.classList.add("hidden");
   document.getElementById("workout-alert").classList.add("hidden");
   document.getElementById("session-review-box").classList.add("hidden");
+  document.getElementById("muscle-feedback-box").classList.add("hidden");
   renderDayButtons(); renderExercises(); renderLastSession(); renderUpNextBanner();
 }
 function renderDayButtons() {
@@ -1992,6 +2048,7 @@ async function saveSession() {
   const btn=document.getElementById("save-btn");
   btn.disabled=true; btn.textContent="Saving..."; setSyncStatus("saving");
   document.getElementById("session-review-box").classList.add("hidden");
+  document.getElementById("muscle-feedback-box").classList.add("hidden");
 
   try {
     await sheetsCall({ action:"clear", sessionKey });
@@ -2099,6 +2156,8 @@ async function saveSession() {
     renderDayButtons(); renderExercises(); renderLastSession();
     toast(`Saved${changes.length?" — "+changes.filter(c=>c.dir==="up").length+" set(s) progressed":""}${extraMsg}`);
 
+    renderMuscleFeedbackCard(musclesTrainedFromRows(rows));
+
     // Fire-and-forget: doesn't block the save flow or re-enable of the button below.
     requestSessionReview(sessionKey, dayLabel, cleanSessDate);
   } catch(e) {
@@ -2106,6 +2165,85 @@ async function saveSession() {
     toast("Save failed: "+e.message);
   }
   btn.disabled=false; btn.textContent="Save Session →";
+}
+
+// ── Post-session muscle feedback ─────────────────────────────────────────────
+// Two taps per muscle trained today, feeding volumeDeltaFromFeedback() above —
+// this is what replaced the calendar-based volume ramp with something that
+// actually responds to the athlete. See GAP-ANALYSIS.md §1.6.
+const MF_SORENESS_OPTIONS = [
+  { val:1, label:"No soreness at all" },
+  { val:2, label:"Healed well before this session" },
+  { val:3, label:"Just barely healed in time" },
+  { val:4, label:"Still sore" },
+];
+const MF_PERFORMANCE_OPTIONS = [
+  { val:1, label:"Exceeded targets easily" },
+  { val:2, label:"Hit targets as planned" },
+  { val:3, label:"Struggled to hit targets" },
+  { val:4, label:"Couldn't match last session" },
+];
+let pendingMuscleFeedback = {}; // { group: {soreness, performance} } — filled in as the user taps
+
+// Muscles actually trained this session, ranked by fractional hard-set-
+// equivalent credit from CONTRIBUTIONS. A muscle only gets a feedback prompt
+// once today's session gave it roughly a hard set or more of stimulus —
+// skips muscles that only picked up a token secondary hit.
+function musclesTrainedFromRows(rows) {
+  const totals = {};
+  rows.forEach(row => {
+    const exName = row[2], weight = row[4], reps = row[5];
+    const wStr = String(weight||""), rStr = String(reps||"");
+    if (wStr.includes("L:") || rStr.includes("L:")) return; // unilateral rows — different format, skip
+    if (!isWorkingSet(weight, reps)) return;
+    Object.entries(getMuscleContributions(exName)).forEach(([group, frac]) => {
+      if (group === "Other") return;
+      totals[group] = (totals[group]||0) + frac;
+    });
+  });
+  return Object.entries(totals).filter(([,v]) => v >= 1).sort((a,b)=>b[1]-a[1]).map(([g])=>g);
+}
+
+function renderMuscleFeedbackCard(muscles) {
+  const box = document.getElementById("muscle-feedback-box");
+  if (!box) return;
+  if (!muscles.length) { box.classList.add("hidden"); return; }
+  pendingMuscleFeedback = {};
+  const body = document.getElementById("muscle-feedback-body");
+  body.innerHTML = muscles.map(group => `
+    <div class="mf-row" data-group="${group}">
+      <div class="mf-row-name">${group}</div>
+      <div class="mf-group-label">Soreness recovery</div>
+      <div class="mf-options" data-field="soreness">
+        ${MF_SORENESS_OPTIONS.map(o=>`<button type="button" class="mf-opt" data-val="${o.val}">${o.label}</button>`).join("")}
+      </div>
+      <div class="mf-group-label">Performance vs last time</div>
+      <div class="mf-options" data-field="performance">
+        ${MF_PERFORMANCE_OPTIONS.map(o=>`<button type="button" class="mf-opt" data-val="${o.val}">${o.label}</button>`).join("")}
+      </div>
+    </div>
+  `).join("");
+  body.querySelectorAll(".mf-opt").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const row = btn.closest(".mf-row");
+      const group = row.dataset.group;
+      const field = btn.closest(".mf-options").dataset.field;
+      row.querySelector(`.mf-options[data-field="${field}"]`).querySelectorAll(".mf-opt").forEach(b=>b.classList.remove("selected"));
+      btn.classList.add("selected");
+      if (!pendingMuscleFeedback[group]) pendingMuscleFeedback[group] = {};
+      pendingMuscleFeedback[group][field] = parseInt(btn.dataset.val, 10);
+    });
+  });
+  box.classList.remove("hidden");
+}
+
+function submitMuscleFeedback() {
+  let count = 0;
+  Object.entries(pendingMuscleFeedback).forEach(([group, fb]) => {
+    if (fb.soreness && fb.performance) { setMuscleFeedback(group, fb.soreness, fb.performance); count++; }
+  });
+  document.getElementById("muscle-feedback-box").classList.add("hidden");
+  if (count) { toast(`Feedback saved for ${count} muscle${count>1?"s":""} — factored into next week's sets`); renderExercises(); }
 }
 
 // ── AI: end-of-session review ────────────────────────────────────────────────
@@ -2941,6 +3079,8 @@ async function init() {
   document.getElementById("vol-next").addEventListener("click",()=>{volWeekOffset++;renderVolumeTab();});
 
   document.getElementById("save-btn").addEventListener("click",saveSession);
+  document.getElementById("mf-save").addEventListener("click",submitMuscleFeedback);
+  document.getElementById("mf-skip").addEventListener("click",()=>document.getElementById("muscle-feedback-box").classList.add("hidden"));
   document.getElementById("bw-save").addEventListener("click",saveBw);
   document.getElementById("override-toggle").addEventListener("change",e=>{
     overrideMode = e.target.checked;

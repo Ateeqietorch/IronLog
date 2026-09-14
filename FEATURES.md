@@ -156,6 +156,9 @@ Also checks (via `recentAbCoreCheck`) whether any ab/core exercise has been logg
 
 **Notes matter here.** Every exercise's free-text Notes field is included in what the AI reads (`"— note: knee felt off"`), specifically so qualitative signals it can't get from raw numbers (form breakdown, joint discomfort) can inform its hold/deload judgment.
 
+### 2a. Post-Session Muscle Feedback (local, not an AI call)
+Fires right after save, alongside the AI review. For every muscle credited ≥1 fractional hard set this session (via `CONTRIBUTIONS`, §3), a two-tap card appears: **soreness recovery** (no soreness at all / healed well before this session / just barely healed in time / still sore) and **performance vs. last time** (exceeded targets easily / hit targets as planned / struggled to hit targets / couldn't match last session). Skippable per muscle or entirely. This is pure local state (`il:muscleFeedback`, like mesocycle/AI-adjustment/landmark state) — no backend call — and it's what drives the volume-progression rule described in §9.
+
 ### 3. Pre-Session Feeling Check (`ai_presession_check`)
 Opened manually before starting ("💬 How are you feeling today?"). You describe how you feel; the AI can reduce weight/sets/reps, substitute an exercise, or make no change — applied as a **today-only override** (routes through the same mechanism as manual Override Today, §8), never touching the permanent program. If a deload is currently active and your stated feeling clearly indicates you feel strong and don't want it, the AI can cancel it — restarting the mesocycle clock from today rather than just clearing the flag (which would otherwise immediately re-trigger if you're already past the scheduled week).
 
@@ -190,7 +193,7 @@ A permanent pseudo-day for one-off, built-on-the-fly sessions. Its exercise list
 - **Early trigger:** if average logged RPE across the last 6 session-dates (program-wide) hits ≥9.3, a deload starts immediately regardless of what week it is.
 - **AI trigger:** the Session Review can also start one (§7), subject to its now-stricter evidence bar.
 - **Deload magnitude:** ~10% weight cut, ~25% set-count cut, target RPE capped at 6 (≈4 reps in reserve). These specific numbers come from a 2022 survey of real strength/physique coaches' actual practice — earlier versions of this app stacked a deeper cut (15% weight *and* RPE cap 8 *and* 50% volume cut), which was double-dipping two separate interventions and using a powerlifting-style volume cut on what's explicitly a hypertrophy-focused program.
-- **Volume ramp:** each muscle group's weekly hard-set count ramps from its MEV toward its MRV across the 6 weeks (one exercise at a time, capped so no single exercise balloons too far), resetting after a deload.
+- **Volume progression is feedback-driven, not a calendar.** `applyVolumeRamp()` no longer climbs a fixed MEV→MRV schedule across the 6 weeks. Instead it applies RP's published two-factor set-progression rule (§1.6 of `GAP-ANALYSIS.md`) once per post-session muscle-feedback submission (§7a below): soreness recovery (1=none .. 4=still sore) × performance vs. last time (1=exceeded easily .. 4=couldn't match) → add 2 sets / add 1 / hold / pull back 1, clamped to `[MEV, MRV]` and distributed one exercise at a time (same "no single exercise balloons too far" cap as before). With no feedback recorded yet for a muscle, volume simply holds — the app doesn't guess at a change it has no evidence for. Deload set-cuts are unchanged and still calendar/fatigue-triggered (a separate, program-wide concern from per-muscle volume).
 - **Cancellable:** via the pre-session feeling check (§7) if you explicitly say you feel strong and don't want it.
 
 ---
