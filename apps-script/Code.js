@@ -3,6 +3,7 @@ const DRAFTS_SHEET     = "Drafts";
 const BODYWEIGHT_SHEET = "Bodyweight";
 const SWAPS_SHEET       = "ExerciseSwaps";
 const SUMMARIES_SHEET   = "SessionSummaries";
+const PROGRAMS_SHEET    = "Programs";
 const CLAUDE_MODEL       = "claude-sonnet-5";
 
 // Explicit training goal, threaded into every AI prompt that proposes or
@@ -123,6 +124,36 @@ function doGet(e) {
       return respond({ ok: true, msg: "bodyweight deleted" });
     }
 
+    // ── Program backup (additive, opt-in) ──────────────────────────────────────
+    // Server-side copy of program state (exercises/customDays/dayLabels), which
+    // otherwise lives ONLY in localStorage — clearing the browser wipes it with
+    // no recovery. This is a BACKUP, not the source of truth: the client still
+    // reads/writes localStorage as before on every session; these two actions
+    // just mirror it here in the background (save_program, fire-and-forget) and
+    // let the user pull a copy back manually (load_program, via an explicit
+    // "Restore from cloud backup" action — never automatic, never silent).
+    // Token-gated via checkAuthToken's bootstrap-on-first-use: this raises the
+    // bar above a fully open endpoint, but a token embedded in client-side JS
+    // is not real secrecy — anyone who reads the deployed JS can find it. It's
+    // sized for "not casually discoverable by scanning," not for hostile actors.
+    if (action === "save_program") {
+      if (!checkAuthToken(e.parameter.token)) return respond({ ok: false, msg: "unauthorized" });
+      const sheet = getOrCreateSheet(ss, PROGRAMS_SHEET, ["UpdatedAt", "ProgramJSON"]);
+      const lastRow = sheet.getLastRow();
+      if (lastRow > 1) sheet.deleteRows(2, lastRow - 1);
+      sheet.appendRow([new Date().toISOString(), e.parameter.program]);
+      return respond({ ok: true, msg: "program backed up" });
+    }
+
+    if (action === "load_program") {
+      if (!checkAuthToken(e.parameter.token)) return respond({ ok: false, msg: "unauthorized" });
+      const sheet = getOrCreateSheet(ss, PROGRAMS_SHEET, ["UpdatedAt", "ProgramJSON"]);
+      const data  = sheet.getDataRange().getValues();
+      if (data.length < 2) return respond({ ok: true, program: null });
+      const [updatedAt, programJson] = data[1];
+      return respond({ ok: true, program: programJson, updatedAt: String(updatedAt) });
+    }
+
     // ── AI: per-exercise reconsideration ───────────────────────────────────────
     // On-demand, mid-session. Pulls recent history for the exercise itself
     // (never trusts the client to supply it), asks Claude for a substitute +
@@ -141,7 +172,9 @@ function doGet(e) {
 
       const system = "You are a hypertrophy-training assistant embedded in IronLog, a workout tracker for an " +
         "intermediate-to-advanced lifter. All weights are in pounds. Training goal: " + TRAINING_GOAL + " " +
-        EXERCISE_CONSTRAINTS + " Given " +
+        EXERCISE_CONSTRAINTS + " A note containing \"[ladder-test]\" marks a set deliberately logged heavier and " +
+        "lower-rep than the exercise's other sets that session — a one-set test of the next dumbbell size, not a " +
+        "logging inconsistency. Given " +
         "the exercise the user wants reconsidered and their stated reason, propose ONE substitute exercise (can be a different " +
         "movement pattern, or the same exercise with adjusted parameters if that better fits the reason) with " +
         "adjusted sets/rep range/working weight, and a brief rationale (1-2 sentences). " +
@@ -200,7 +233,11 @@ function doGet(e) {
       const system = "You are a hypertrophy-training coach reviewing a just-completed workout logged in IronLog, " +
         "which auto-applies your recommendations (with the user notified, not asked to confirm each one) — so " +
         "only recommend a change you're genuinely confident about, not a passing observation. Training goal: " +
-        TRAINING_GOAL + " Write a short, " +
+        TRAINING_GOAL + " A note containing \"[ladder-test]\" marks a set the app deliberately logged at a HEAVIER " +
+        "weight and lower reps than the exercise's other sets that session — a one-set test of the next dumbbell " +
+        "size, not a mistake or a sign of inconsistent logging. A missed ladder test is an expected, informative " +
+        "outcome on its own, not evidence of decline or fatigue — do not cite it as a reason to hold or deload " +
+        "unless the SAME exercise's other, non-tagged sets independently show a real problem. Write a short, " +
         "honest, encouraging coaching summary (3-5 sentences): call out notable trends (volume trending low/high " +
         "on a muscle group, RPE drift upward, a pattern of missed/incomplete sets), and if relevant, one concrete " +
         "suggestion for the next session on this day. Ab/core work is intentionally not part of the structured " +
@@ -409,6 +446,23 @@ function doGet(e) {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+// Bootstrap-on-first-use: no token is set up in advance. The FIRST call to a
+// token-gated action stores whatever token the client sent as the accepted
+// one from then on; every later call must match it. Reasonable for a
+// single-user deployment where the legitimate client is expected to be the
+// first caller after each new deployment — not a substitute for real auth if
+// this were ever multi-user.
+function checkAuthToken(providedToken) {
+  if (!providedToken) return false;
+  const props  = PropertiesService.getScriptProperties();
+  const stored = props.getProperty("PROGRAM_AUTH_TOKEN");
+  if (!stored) {
+    props.setProperty("PROGRAM_AUTH_TOKEN", providedToken);
+    return true;
+  }
+  return stored === providedToken;
+}
+
 function clearByKey(sheet, keyValue, colIndex) {
   const data = sheet.getDataRange().getValues();
   for (let i = data.length - 1; i >= 1; i--) {

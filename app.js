@@ -40,6 +40,27 @@ function getLoadIncrement(exName) {
   return isDumbbellExercise(exName) ? 5 : 2.5;
 }
 
+// Ladder-set testing (below) is opt-out, defaulting ON to match its existing
+// behavior, but a real toggle rather than silently-always-on — surfaced in
+// the Library tab.
+function isLadderEnabled() {
+  const v = lsGet("il:ladderEnabled", null);
+  return v === null ? true : !!v;
+}
+function setLadderEnabled(v) { lsSet("il:ladderEnabled", !!v); }
+
+// Explicit marker written into a set's own Notes field (saveSession) the one
+// time the app actually rendered a ladder-test offer for it — preferred over
+// inferring "was this a ladder attempt" purely from the weight pattern
+// (heavier set 1 than the rest), which can't tell a deliberate probe from an
+// ordinary session where set 1 just happened to be logged heavier. Old rows
+// saved before this existed have no tag, so callers still fall back to the
+// weight heuristic for them.
+const LADDER_TAG = "[ladder-test]";
+function isLadderTagged(notes) {
+  return typeof notes === "string" && notes.includes(LADDER_TAG);
+}
+
 // Progression load increment. ACSM guidance: increase load ~2-10% once the
 // full prescribed rep range is met comfortably. A flat lb bump (this app's
 // old approach) isn't proportional — the same +5lb is a rounding error on a
@@ -126,7 +147,11 @@ function setLandmark(group, mev, mrv){
   lsSet("il:landmarks", custom);
 }
 
-// Muscle group mapping for volume tracking
+// Legacy single-group membership map — kept ONLY as the final fallback for
+// exercise names that don't match anything in CONTRIBUTIONS below (a custom
+// name typed via swap/log-by-description, or a future exercise added to
+// EXERCISE_REPO without a contribution vector). Everything that ships with
+// the app should be classified in CONTRIBUTIONS instead.
 const MUSCLE_GROUPS_MAP = {
   "Chest": ["Barbell Bench Press","Incline Barbell Press","Incline Dumbbell Press","Dumbbell Bench Press","Pec Deck / Cable Fly","Cable Crossover","Dumbbell Fly","Push-Up","Incline Barbell Bench Press"],
   "Shoulders": ["Barbell Overhead Press","Dumbbell Shoulder Press","Cable Lateral Raise","Dumbbell Lateral Raise","Rear Delt Fly","Face Pull","Upright Row"],
@@ -139,11 +164,105 @@ const MUSCLE_GROUPS_MAP = {
   "Calves": ["Standing Calf Raise","Seated Calf Raise","Single Leg Calf Raise"],
 };
 
-function getMuscleGroup(exName) {
-  for (const [group, exercises] of Object.entries(MUSCLE_GROUPS_MAP)) {
-    if (exercises.some(e => exName.toLowerCase().includes(e.toLowerCase()) || e.toLowerCase().includes(exName.toLowerCase()))) return group;
+// Per-exercise muscle CONTRIBUTION vectors — 1.0 for the prime mover, 0.5 for
+// a meaningful secondary/synergist, nothing for muscles the movement doesn't
+// meaningfully load. Replaces single-group attribution (bench press credited
+// chest and NOTHING else) with fractional counting, per the 2025
+// Pelland/Zourdos dose-response meta-regressions: classifying sets as
+// direct/indirect and weighting indirect work at 0.5 produced the
+// best-fitting dose-response model of the three methods they compared. This
+// is a judgment call per movement, not a measurement — treat the 0.5s as
+// "roughly half the stimulus," not a precise figure.
+const CONTRIBUTIONS = {
+  "Barbell Bench Press":       { Chest:1.0, Triceps:0.5, Shoulders:0.5 },
+  "Incline Barbell Press":     { Chest:1.0, Shoulders:0.5, Triceps:0.4 },
+  "Incline Barbell Bench Press": { Chest:1.0, Shoulders:0.5, Triceps:0.4 }, // alias — DEFAULTS Day 3 name
+  "Incline Dumbbell Press":    { Chest:1.0, Shoulders:0.5, Triceps:0.4 },
+  "Dumbbell Bench Press":      { Chest:1.0, Triceps:0.5, Shoulders:0.4 },
+  "Pec Deck / Cable Fly":      { Chest:1.0 },
+  "Cable Crossover":           { Chest:1.0 },
+  "Dumbbell Fly":              { Chest:1.0 },
+  "Push-Up":                   { Chest:1.0, Triceps:0.5, Shoulders:0.3 },
+
+  "Barbell Overhead Press":    { Shoulders:1.0, Triceps:0.5 },
+  "Dumbbell Shoulder Press":   { Shoulders:1.0, Triceps:0.5 },
+  "Cable Lateral Raise":       { Shoulders:1.0 },
+  "Dumbbell Lateral Raise":    { Shoulders:1.0 },
+  "Rear Delt Fly":             { Shoulders:1.0, Back:0.2 },
+  "Face Pull":                 { Shoulders:1.0, Back:0.4 },
+  "Upright Row":               { Shoulders:1.0, Back:0.3 },
+
+  "Tricep Rope Pushdown":      { Triceps:1.0 },
+  "V-Bar Pushdown":            { Triceps:1.0 },
+  "Overhead Tricep Extension": { Triceps:1.0 },
+  "Tricep Dip":                { Triceps:1.0, Chest:0.5, Shoulders:0.3 },
+  "Skull Crusher":             { Triceps:1.0 },
+  "Single Arm Pushdown":       { Triceps:1.0 },
+
+  "Weighted Pull-Up":          { Back:1.0, Biceps:0.5 },
+  "Weighted Pull-Up / Lat Pulldown": { Back:1.0, Biceps:0.5 }, // alias — DEFAULTS Day 3 name
+  "Lat Pulldown":              { Back:1.0, Biceps:0.4 },
+  "Seated Cable Row":          { Back:1.0, Biceps:0.4 },
+  "Chest-Supported DB Row":    { Back:1.0, Biceps:0.4 },
+  "Chest-Supported T-Bar Row": { Back:1.0, Biceps:0.4 },
+  "Single-Arm Cable Row":      { Back:1.0, Biceps:0.4 },
+  "Single-Arm DB Row":         { Back:1.0, Biceps:0.4 },
+  "Straight Arm Pulldown":     { Back:1.0 },
+
+  "EZ Bar Curl":               { Biceps:1.0 },
+  "Barbell Curl":               { Biceps:1.0 },
+  "Incline Dumbbell Curl":     { Biceps:1.0 },
+  "Hammer Curl":                { Biceps:1.0 },
+  "Cable Curl":                 { Biceps:1.0 },
+  "Concentration Curl":        { Biceps:1.0 },
+
+  "Hack Squat":                 { Quads:1.0, Glutes:0.4 },
+  "Leg Press":                  { Quads:1.0, Glutes:0.4, Hamstrings:0.2 },
+  "Single Leg Leg Press":       { Quads:1.0, Glutes:0.4, Hamstrings:0.2 },
+  "Leg Extension":              { Quads:1.0 },
+  "Single Leg Extension":       { Quads:1.0 },
+  "Bulgarian Split Squat":      { Quads:1.0, Glutes:0.5, Hamstrings:0.2 },
+  "Walking Lunges (DB)":        { Quads:1.0, Glutes:0.5, Hamstrings:0.2 },
+
+  "Romanian Deadlift":          { Hamstrings:1.0, Glutes:0.5 },
+  "Stiff-Leg Deadlift (DB)":    { Hamstrings:1.0, Glutes:0.4 },
+  "Leg Curl":                    { Hamstrings:1.0 },
+  "Leg Curl (seated)":          { Hamstrings:1.0 },
+  "Single Leg Curl":            { Hamstrings:1.0 },
+
+  "Hip Thrust":                 { Glutes:1.0, Hamstrings:0.3 },
+  "Single Leg Hip Thrust":      { Glutes:1.0, Hamstrings:0.3 },
+  "Cable Kickback":             { Glutes:1.0 },
+
+  "Standing Calf Raise":        { Calves:1.0 },
+  "Seated Calf Raise":          { Calves:1.0 },
+  "Single Leg Calf Raise":      { Calves:1.0 },
+};
+
+// Fractional muscle credit for an exercise: { muscle: fraction }. Exact name
+// match first, then the same fuzzy substring match CONTRIBUTIONS' own aliases
+// rely on, then the legacy single-group map, so a custom/swapped-in exercise
+// name never silently drops out of volume tracking entirely.
+function getMuscleContributions(exName) {
+  if (CONTRIBUTIONS[exName]) return CONTRIBUTIONS[exName];
+  const lname = (exName || "").toLowerCase();
+  for (const [name, vec] of Object.entries(CONTRIBUTIONS)) {
+    if (lname.includes(name.toLowerCase()) || name.toLowerCase().includes(lname)) return vec;
   }
-  return "Other";
+  for (const [group, list] of Object.entries(MUSCLE_GROUPS_MAP)) {
+    if (list.some(e => lname.includes(e.toLowerCase()) || e.toLowerCase().includes(lname))) return { [group]: 1.0 };
+  }
+  return { "Other": 1.0 };
+}
+
+// Primary muscle group for an exercise — the highest-weighted entry in its
+// contribution vector. Used wherever the app needs ONE group (fatigue
+// scoring, the volume ramp, swap suggestions), as opposed to the fractional
+// vector used for volume counting itself.
+function getMuscleGroup(exName) {
+  const vec = getMuscleContributions(exName);
+  const entries = Object.entries(vec);
+  return entries.length ? entries.sort((a, b) => b[1] - a[1])[0][0] : "Other";
 }
 
 // ── Exercise Repository ───────────────────────────────────────────────────────
@@ -486,17 +605,55 @@ function setAiAdjustment(exName, adj) {
 }
 function clearAiAdjustment(exName) { setAiAdjustment(exName, null); }
 
-// Ramps each muscle group's total weekly hard-set count from MEV toward MRV
-// across the mesocycle (research: add ~1-2 sets/muscle/week toward MRV, then
-// deload). Applied once per week/deload TRANSITION rather than every render,
-// so it doesn't fight with a manual +/- adjustment mid-week. Mutates the
-// PERMANENT program across every day (a muscle group can span multiple
-// training days) and persists like any other program edit.
+// Post-session subjective per-muscle feedback — the mechanism that lets
+// volume progression respond to the athlete instead of a calendar. Two
+// factors per RP's published set-progression algorithm (GAP-ANALYSIS.md
+// §1.6): soreness recovery (1=fully recovered before this session even
+// happened .. 4=still sore) and performance vs last time training this
+// muscle (1=exceeded targets easily .. 4=couldn't match last session).
+// Stored locally like every other piece of coaching state (mesocycle, AI
+// adjustments, landmarks) — this describes training, it isn't a session
+// log, so it doesn't belong in the Sheet.
+function getMuscleFeedback(group) {
+  const store = lsGet("il:muscleFeedback", {});
+  return store[group] || null;
+}
+function setMuscleFeedback(group, soreness, performance) {
+  const store = lsGet("il:muscleFeedback", {});
+  store[group] = { soreness, performance, loggedAt: Date.now() };
+  lsSet("il:muscleFeedback", store);
+}
+
+// RP's two-factor rule, collapsed to the whole-set delta to apply this week:
+//   soreness 1 + performance 1            -> add 2 (their range is "2-3"; the
+//                                             conservative end, consistent
+//                                             with this app's other literature
+//                                             -> practice translations)
+//   soreness <=2 AND performance <=2       -> add 1
+//   performance 4 (couldn't match at all)  -> pull back 1, treat as a
+//                                             mini recovery signal for the muscle
+//   otherwise (still sore and/or struggled) -> hold
+// Returns null when there's no feedback yet — the caller holds volume rather
+// than guessing, which is the whole point of retiring the calendar ramp.
+function volumeDeltaFromFeedback(fb) {
+  if (!fb) return null;
+  if (fb.performance === 4) return -1;
+  if (fb.soreness === 1 && fb.performance === 1) return 2;
+  if (fb.soreness <= 2 && fb.performance <= 2) return 1;
+  return 0;
+}
+
+// Adjusts each muscle group's total weekly hard-set count from per-muscle
+// subjective feedback (see above), applied at most once per feedback
+// submission so it doesn't reapply every render. Deload set-cuts remain a
+// separate, calendar/fatigue-triggered mechanism (the mesocycle engine's
+// job, not a per-muscle read) and are unchanged. Mutates the PERMANENT
+// program across every day (a muscle group can span multiple training days)
+// and persists like any other program edit.
 function applyVolumeRamp(meso) {
   const rampState = lsGet("il:volumeRamp", {});
-  const key = meso.inDeload ? "deload" : "w" + meso.weekNum;
-  if (rampState.lastKey === key) return; // already ramped for this state
-  const wasInDeload = rampState.lastKey === "deload";
+  const wasInDeload = rampState.deloadActive === true;
+  rampState.groups = rampState.groups || {};
   let changed = false;
 
   MUSCLE_GROUPS.forEach(group => {
@@ -527,24 +684,41 @@ function applyVolumeRamp(meso) {
       changed = true;
     }
 
-    const weeklyTarget = Math.round(mev + (mrv - mev) * Math.min(meso.weekNum, MESOCYCLE_WEEKS) / MESOCYCLE_WEEKS);
+    const fb = getMuscleFeedback(group);
+    const consumed = rampState.groups[group]?.consumedAt;
+    if (!fb || consumed === fb.loggedAt) return; // no new feedback -> hold, don't guess
+
+    const delta = volumeDeltaFromFeedback(fb);
+    rampState.groups[group] = { consumedAt: fb.loggedAt };
+    if (!delta) return;
+
     let currentTotal = entries.reduce((sum, ex) => sum + ex.sets, 0);
     let guard = 0;
-    while (currentTotal < weeklyTarget && guard < 20) {
-      const candidate = entries
-        .filter(ex => ex.sets < (ex._rampBase ?? ex.sets) + 3) // cap how far any one exercise can balloon
-        .sort((a, b) => a.sets - b.sets)[0];
-      if (!candidate) break;
-      if (candidate._rampBase == null) candidate._rampBase = candidate.sets;
-      candidate.sets++;
-      currentTotal++;
+    while (guard < Math.abs(delta)) {
+      if (delta > 0) {
+        if (currentTotal >= mrv) break;
+        const candidate = entries
+          .filter(ex => ex.sets < (ex._rampBase ?? ex.sets) + 3) // cap how far any one exercise can balloon
+          .sort((a, b) => a.sets - b.sets)[0];
+        if (!candidate) break;
+        if (candidate._rampBase == null) candidate._rampBase = candidate.sets;
+        candidate.sets++;
+        currentTotal++;
+      } else {
+        if (currentTotal <= mev) break;
+        const candidate = entries.filter(ex => ex.sets > 1).sort((a, b) => b.sets - a.sets)[0];
+        if (!candidate) break;
+        candidate.sets--;
+        currentTotal--;
+      }
       changed = true;
       guard++;
     }
   });
 
+  rampState.deloadActive = meso.inDeload;
   if (changed) lsSet("il:exercises", exercises);
-  lsSet("il:volumeRamp", { lastKey: key });
+  lsSet("il:volumeRamp", rampState);
 }
 
 // Session-tab banner explaining the current mesocycle week or an active deload.
@@ -611,6 +785,10 @@ function computeTarget(ex, history, meso) {
   // Some sets failed outright (0 reps) even though others were valid — treat
   // as a full miss for backoff severity, same as the all-failed branch above.
   const backoff   = failed.length ? { weight: roundToNearest(medWeight * (1 - computeBackoffPct(0, ex.repMin, medRPE)), 2.5), reps: ex.repMin } : null;
+  // An AI-applied "hold" adjustment caps progression at maintain, even if
+  // the numbers alone would say to bump — used when the review flagged this
+  // exercise as needing a session to stabilize before pushing further.
+  const holding = adjustment && adjustment.holdVolume;
 
   // Deload overrides everything else — always ease off regardless of how
   // last session went.
@@ -619,6 +797,46 @@ function computeTarget(ex, history, meso) {
     return { weight, reps: ex.repMin, e1rm: calcE1RM(weight, ex.repMin), reason: "deload", backoff: null };
   }
 
+  // ── Ladder set for coarse-increment (dumbbell) exercises ──
+  // Rather than jumping every set to the next dumbbell size at once, test
+  // it with ONE set first: set 1 goes to the next weight at repMin reps
+  // while the rest hold at the already-proven weight/reps. Prefers the
+  // explicit LADDER_TAG written into a set's own Notes at save time (once
+  // the app has actually rendered this as a ladder offer); falls back to
+  // the weight pattern (set 1 heavier than the rest) for older rows saved
+  // before the tag existed. Togglable in the Library tab (isLadderEnabled).
+  const ladderOn = isDumbbellExercise(ex.name) && isLadderEnabled();
+  if (ladderOn && !holding && valid.length > 1) {
+    const firstWeight = parseFloat(valid[0].weight);
+    const restRows    = valid.slice(1);
+    const restMedian  = median(restRows.map(r => parseFloat(r.weight)));
+    const wasLadderAttempt = isLadderTagged(valid[0].notes) || firstWeight > restMedian + 0.01;
+    if (wasLadderAttempt) {
+      const ladderReps = parseFloat(valid[0].reps);
+      if (ladderReps >= ex.repMin) {
+        // Ladder set succeeded — promote ALL sets to the validated weight.
+        return { weight: firstWeight, reps: ex.repMin, e1rm: calcE1RM(firstWeight, ex.repMin), reason: "progress", backoff };
+      }
+      // Ladder set missed — hold at the proven weight/reps and offer the
+      // SAME ladder test again rather than escalating further on a miss.
+      const restReps = Math.round(median(restRows.map(r => parseFloat(r.reps))));
+      return {
+        weight: restMedian, reps: Math.min(restReps + 1, repCeiling),
+        e1rm: calcE1RM(restMedian, restReps), reason: "hold", backoff,
+        ladderOverride: { weight: firstWeight, reps: ex.repMin, e1rm: calcE1RM(firstWeight, ex.repMin) }
+      };
+    }
+  }
+
+  // Current strength estimate from last session's actual weight/reps/RPE —
+  // feeds the e1RM inversion below so a weight bump lands on a rep count
+  // that actually preserves the target RIR at the new load, instead of
+  // always resetting to repMin (which meant the steady state of every
+  // exercise was "climb to the top of the range, get knocked back to the
+  // floor, repeat" — a large share of your training life at the bottom of
+  // the rep range by construction, not by performance).
+  const estE1RM = medRPE !== null ? calcE1RM_RPE(medWeight, medReps, medRPE) : calcE1RM(medWeight, medReps);
+
   // Autoregulated double progression: last session's actual RPE undershot
   // the descending target by a full point+ (it felt clearly easier than it
   // was supposed to) and reps were already near the top of the range —
@@ -626,21 +844,32 @@ function computeTarget(ex, history, meso) {
   const midTargetRPE = targetRPEForSet(Math.floor((ex.sets - 1) / 2), ex.sets, false);
   const undershotEffort = medRPE !== null && medRPE <= midTargetRPE - 1 && medReps >= repCeiling - 1;
 
-  // An AI-applied "hold" adjustment caps progression at maintain, even if
-  // the numbers alone would say to bump — used when the review flagged this
-  // exercise as needing a session to stabilize before pushing further.
-  const holding = adjustment && adjustment.holdVolume;
-
   if (!holding && (hitRatio >= 0.75 || undershotEffort)) {
+    if (ladderOn) {
+      // First time hitting the rep ceiling on a dumbbell exercise — offer a
+      // ladder test on set 1 instead of jumping every set at once. The
+      // OTHER sets hold at their already-earned reps (repCeiling), NOT a
+      // reset to repMin — only the ladder set itself uses the new weight.
+      const nextW = computeNextWeight(medWeight, ex.name);
+      return {
+        weight: medWeight, reps: repCeiling, e1rm: calcE1RM(medWeight, repCeiling), reason: "hold", backoff, estE1RM,
+        ladderOverride: { weight: nextW, reps: ex.repMin, e1rm: calcE1RM(nextW, ex.repMin) }
+      };
+    }
     const weight = computeNextWeight(medWeight, ex.name);
-    return { weight, reps: ex.repMin, e1rm: calcE1RM(weight, ex.repMin), reason: "progress", backoff };
+    // Invert the strength estimate at the NEW weight and set-1's target RIR
+    // rather than resetting to repMin — a ~5% bump usually still leaves you
+    // well above the bottom of the range, which is the whole point.
+    const setOneRIR = 10 - targetRPEForSet(0, ex.sets, false);
+    const projectedReps = Math.max(ex.repMin, Math.min(ex.repMax, Math.round((estE1RM / weight - 1) * 30 - setOneRIR)));
+    return { weight, reps: projectedReps, e1rm: calcE1RM(weight, projectedReps), reason: "progress", backoff, estE1RM };
   }
 
   // Overshot effort: already grinding at/above target RPE despite not
   // reaching the top of the rep range — hold rather than push reps further
   // into fatigue that wasn't part of the plan.
   if (medRPE !== null && medRPE >= 9.5) {
-    return { weight: medWeight, reps: medReps, e1rm: calcE1RM(medWeight, medReps), reason: "hold", backoff };
+    return { weight: medWeight, reps: medReps, e1rm: calcE1RM(medWeight, medReps), reason: "hold", backoff, estE1RM };
   }
 
   // Reps can climb up to repCeiling before the exercise falls back to the
@@ -648,13 +877,21 @@ function computeTarget(ex, history, meso) {
   // progression lever for coarse-increment (dumbbell) exercises that can't
   // cleanly progress by weight every session.
   const targetReps = holding ? medReps : Math.min(medReps + 1, repCeiling);
-  return { weight: medWeight, reps: targetReps, e1rm: calcE1RM(medWeight, targetReps), reason: holding ? "hold" : "maintain", backoff };
+  return { weight: medWeight, reps: targetReps, e1rm: calcE1RM(medWeight, targetReps), reason: holding ? "hold" : "maintain", backoff, estE1RM };
 }
 
 // Legacy per-set-index target logic, kept ONLY for unilateral exercises. Their
 // weight/reps are stored as "L:x/R:y" strings which isWorkingSet can't parse,
 // so the median/75% rule above can't apply to them without also teaching every
 // consumer to parse per-side values — out of scope for the progression fix.
+//
+// DELIBERATE SCOPE BOUNDARY, not an oversight: unilateral exercises get NONE
+// of computeTarget's newer machinery — no e1RM-inverted rep ranges/AMRAP, no
+// per-set autoregulation, and no ladder-set testing (even a unilateral
+// dumbbell exercise like Single-Arm DB Row always resets to repMin on a
+// weight bump here). Porting any of that would mean rebuilding this whole
+// per-side data model first, not a small addition — left for a dedicated
+// pass rather than folded in here.
 function computeTargetPerSet(ex, setIndex, history) {
   const programWeight = ex.weight || 0;
   let lastWeight = programWeight;
@@ -734,6 +971,7 @@ let repoFilter  = "";
 let repoSearch  = "";
 let renderedTargets = {}; // { exIdx: { setIdx: {weight, reps} } } — set at render time
 let struggleSetAdded = {}; // { exIdx: true } — guards against re-adding a set on every keystroke of a struggling set 1
+let sessionAutoAdjust = {}; // { exIdx: { setIdx: pct } } — live within-session per-set weight nudges from actual RPE, cleared with every session reset alongside struggleSetAdded
 let overrideMode = false;      // "Override Today" — edits apply to overrideExercises only
 let overrideExercises = null;  // temp copy of the day's exercise list, used only while overrideMode is on
 let pendingLogDesc = null;     // { date, day, exercises } — parsed "log by description" result awaiting Load
@@ -753,8 +991,74 @@ function cleanDate(raw) {
   return s.trim();
 }
 function lsGet(k,fb) { try { const v=localStorage.getItem(k); return v?JSON.parse(v):fb; } catch { return fb; } }
-function lsSet(k,v) { try { localStorage.setItem(k,JSON.stringify(v)); } catch {} }
+// Program state (exercises/customDays/dayLabels) still lives here as the
+// live source of truth — this just ALSO mirrors it to a Sheet-backed backup
+// in the background whenever it changes, best-effort and silent on failure.
+// See scheduleProgramBackup below and the "Restore from cloud backup" button
+// (Library tab) for the deliberately manual, never-automatic read-back path.
+const PROGRAM_BACKUP_KEYS = ["il:exercises", "il:customDays", "il:dayLabels"];
+function lsSet(k,v) {
+  try { localStorage.setItem(k,JSON.stringify(v)); } catch {}
+  if (PROGRAM_BACKUP_KEYS.includes(k)) scheduleProgramBackup();
+}
 function roundToNearest(val, nearest) { return Math.round(val / nearest) * nearest; }
+
+// Single-user token for the additive program-backup endpoint (see
+// GAP-ANALYSIS.md §5/Phase 0). Generated once on this device and sent with
+// every backup/restore call; the backend accepts whatever token the FIRST
+// caller ever sends and requires an exact match after that. This is NOT
+// real security — a token embedded in client JS is readable by anyone who
+// views source — it just raises the bar above a fully open endpoint. Good
+// enough for a single-user hobby deployment, not a substitute for real auth
+// if this app ever becomes multi-user (open decision, see GAP-ANALYSIS.md §7.6).
+function getAuthToken() {
+  let t = null;
+  try { t = localStorage.getItem("il:authToken"); } catch {}
+  if (!t) {
+    t = (crypto && crypto.randomUUID) ? crypto.randomUUID() : (Date.now().toString(36) + Math.random().toString(36).slice(2));
+    try { localStorage.setItem("il:authToken", t); } catch {}
+  }
+  return t;
+}
+
+let programBackupTimer = null;
+function scheduleProgramBackup() {
+  clearTimeout(programBackupTimer);
+  programBackupTimer = setTimeout(backupProgramToServer, 2000); // debounce rapid successive edits
+}
+async function backupProgramToServer() {
+  try {
+    const program = {
+      exercises: lsGet("il:exercises", null),
+      customDays: lsGet("il:customDays", []),
+      dayLabels: lsGet("il:dayLabels", {}),
+    };
+    if (!program.exercises) return; // nothing to back up yet (pre-init)
+    await sheetsCall({ action:"save_program", token:getAuthToken(), program:JSON.stringify(program) });
+  } catch (e) { /* best-effort — localStorage remains authoritative, silently retried on the next edit */ }
+}
+
+// Deliberately manual, never automatic: fetches the server backup and, only
+// after the user reviews and confirms what it found, replaces local program
+// state. Never called from app init or any background path.
+async function restoreProgramFromServer() {
+  try {
+    const d = await sheetsCall({ action:"load_program", token:getAuthToken() });
+    if (!d.program) { toast("No cloud backup found yet"); return; }
+    const program = JSON.parse(d.program);
+    const dayCount = Object.keys(program.exercises || {}).length;
+    const when = d.updatedAt ? new Date(d.updatedAt).toLocaleString() : "an unknown time";
+    if (!confirm(`Cloud backup from ${when} has ${dayCount} day(s) programmed. Replace your CURRENT local program with it? This cannot be undone.`)) return;
+    lsSet("il:exercises", program.exercises || {});
+    lsSet("il:customDays", program.customDays || []);
+    lsSet("il:dayLabels", program.dayLabels || {});
+    exercises = program.exercises || {};
+    customDays = program.customDays || [];
+    dayLabels = program.dayLabels || {};
+    toast("Program restored from cloud backup");
+    renderDayButtons(); renderExercises();
+  } catch (e) { toast("Restore failed: " + e.message); }
+}
 
 // Suggested warmup ramp for a compound lift's working weight — three
 // ascending, descending-rep sets (standard ramping scheme) so the top set
@@ -839,7 +1143,7 @@ function formatSession(sess) {
 function sessionToRows(sess) {
   const rows = [];
   Object.entries(sess.exercises).forEach(([exercise, sets]) => {
-    sets.forEach(s => rows.push({ exercise, set: parseInt(s.set), weight: s.weight, reps: s.reps, rpe: s.rpe, completed: s.completed }));
+    sets.forEach(s => rows.push({ exercise, set: parseInt(s.set), weight: s.weight, reps: s.reps, rpe: s.rpe, completed: s.completed, notes: s.notes }));
   });
   return rows;
 }
@@ -867,9 +1171,23 @@ function getSetHistory(history, exName, setIndex) {
   const result = [];
   for (const sess of history) {
     const setRows = sess.rows ? sess.rows.filter(r => r.exercise === exName && r.set === setIndex + 1) : [];
-    if (setRows.length > 0) {
-      result.push({ weight: setRows[0].weight, reps: setRows[0].reps, date: sess.date });
+    if (!setRows.length) continue;
+    // Set 1's history feeds the stagnant/declining classification below
+    // (analyseSetHistory). A ladder-tested set 1 is a deliberate probe at a
+    // different weight/rep scheme than "normal" — including it corrupts
+    // that classification (a missed probe can read as decline, a successful
+    // one as a spurious PR). Skip it here the same way computeTarget itself
+    // detects a ladder attempt: explicit tag first, weight pattern fallback.
+    if (setIndex === 0) {
+      const restRows = (sess.rows || []).filter(r => r.exercise === exName && r.set !== 1 && isWorkingSet(r.weight, r.reps));
+      if (restRows.length) {
+        const restMedian = median(restRows.map(r => parseFloat(r.weight)));
+        const w = parseFloat(setRows[0].weight);
+        const wasLadder = isLadderTagged(setRows[0].notes) || (!isNaN(w) && w > restMedian + 0.01);
+        if (wasLadder) continue;
+      }
     }
+    result.push({ weight: setRows[0].weight, reps: setRows[0].reps, date: sess.date });
   }
   return result; // newest first (history is sorted desc)
 }
@@ -949,6 +1267,14 @@ function computeRestSeconds(ex, rpe) {
   }
   return Math.max(45, Math.round(base / 5) * 5);
 }
+// EXPERIMENTAL ladder set (not yet shipped): the rest calc above classifies
+// by ex.repMax, which describes the exercise's NORMAL sets — a ladder set is
+// heavier and lower-rep than that, so it needs its own classification (using
+// repMin as the effective repMax) rather than being timed like a normal
+// light-isolation set it no longer resembles.
+function restClassificationFor(i, si, ex) {
+  return renderedTargets[i]?.[si]?.isLadder ? { ...ex, repMax: ex.repMin } : ex;
+}
 let restTimerInterval = null;
 let restTimerEndsAt = null;
 
@@ -1024,7 +1350,7 @@ function checkForLocalSession() {
   document.getElementById("draft-continue").onclick = () => {
     activeDay = local.day; sessDate = local.date;
     document.getElementById("session-date").value = local.date;
-    liveLog = local.liveLog || {}; liveNote = local.liveNote || {}; struggleSetAdded = {};
+    liveLog = local.liveLog || {}; liveNote = local.liveNote || {}; struggleSetAdded = {}; sessionAutoAdjust = {};
     renderDayButtons(); renderExercises(); renderLastSession();
     banner.classList.add("hidden"); toast("Local session restored");
   };
@@ -1083,7 +1409,7 @@ async function checkForDraft() {
 // positional array (index 0 = set 1); a hole at an index is skipped.
 function mergeSetsIntoLiveLog(entries) {
   const curArr = activeExArray();
-  liveLog = {}; liveNote = {}; struggleSetAdded = {};
+  liveLog = {}; liveNote = {}; struggleSetAdded = {}; sessionAutoAdjust = {};
   entries.forEach(entry => {
     let exIdx = curArr.findIndex(e => e.name === entry.name);
     if (exIdx === -1) {
@@ -1145,7 +1471,7 @@ async function recoverDraft() {
   if (local && hasLoggedData(local.liveLog)) {
     activeDay = local.day; sessDate = local.date;
     document.getElementById("session-date").value = local.date;
-    liveLog = local.liveLog || {}; liveNote = local.liveNote || {}; struggleSetAdded = {};
+    liveLog = local.liveLog || {}; liveNote = local.liveNote || {}; struggleSetAdded = {}; sessionAutoAdjust = {};
     renderDayButtons(); await renderExercises(); renderLastSession(); renderUpNextBanner();
     toast(`Recovered local session from ${local.date}`);
     return;
@@ -1236,25 +1562,63 @@ async function renderExercises() {
             sets: (h.rows||[]).filter(r => r.exercise === ex.name).map(r => ({ weight:r.weight, reps:r.reps }))
           })))
         : exTarget;
-      if (highFatigue && target.reps < upperHalfReps) {
+      // EXPERIMENTAL ladder set (not yet shipped) — set 1 only, testing the
+      // next dumbbell size at a lower rep count. Deliberately does NOT use
+      // the ascending RPE schedule below (which assumes constant weight
+      // across sets and reserves its lowest value for set 1) — a heavier
+      // test set targets a fixed, higher RPE instead.
+      if (si === 0 && !ex.unilateral && exTarget?.ladderOverride) {
+        target = { ...exTarget.ladderOverride, isLadder: true };
+      }
+      // True per-set autoregulation: autoregulateNextSet() (below) nudges an
+      // UPCOMING set's weight once an earlier set's actual RPE this session
+      // ran meaningfully hotter or colder than what was planned for it — the
+      // struggle detector only ever reacted to set 1; this reacts to any set.
+      // Applied here (before reps/e1RM are derived from weight) so everything
+      // downstream sees the adjusted number consistently.
+      const sessAdj = (!ex.unilateral && !target.isLadder) ? sessionAutoAdjust[i]?.[si] : null;
+      if (sessAdj) {
+        const adjWeight = roundToNearest((target.weight || 0) * (1 + sessAdj), getLoadIncrement(ex.name) >= 5 ? 5 : 2.5);
+        target = { ...target, weight: adjWeight, e1rm: calcE1RM(adjWeight, target.reps), autoregulated: true };
+      }
+      if (highFatigue && !target.isLadder && target.reps < upperHalfReps) {
         target = { ...target, reps: upperHalfReps, e1rm: calcE1RM(target.weight, upperHalfReps) };
       }
-      const thisRPE = targetRPEForSet(si, ex.sets, meso.inDeload);
+      const thisRPE = target.isLadder ? 8.5 : targetRPEForSet(si, ex.sets, meso.inDeload);
       // Bilateral exercises hold ONE weight across all sets, but reps at that
       // weight aren't static — asking for climbing RPE while displaying an
       // unchanged rep target is physiologically incoherent (the whole reason
       // RPE climbs to 9.5 by the last set is that fewer reps are left at that
-      // weight). Anchored to set 1's number via the RPE->RIR relationship
-      // already used for e1RM elsewhere in this app, not a separate model.
-      if (!ex.unilateral) {
-        const baseRPE = targetRPEForSet(0, ex.sets, meso.inDeload);
-        const declinedReps = Math.max(REP_FLOOR, Math.round(target.reps - (thisRPE - baseRPE)));
-        target = { ...target, reps: declinedReps, e1rm: calcE1RM(target.weight, declinedReps) };
+      // weight). Reps at each set's target RPE are estimated by inverting the
+      // athlete's current e1RM (same RPE->RIR relationship used for e1RM
+      // elsewhere in this app), shown as a range rather than a hard ceiling,
+      // and the final set is an open AMRAP instead of a number at all.
+      // Skipped for the ladder set — its low rep target is a deliberate,
+      // fixed test number, not a point on the ascending-effort curve.
+      if (!ex.unilateral && !target.isLadder) {
+        const isLastSet = si === ex.sets - 1;
+        if (isLastSet && !meso.inDeload) {
+          // Terminal AMRAP: don't prescribe a rep number on the last set at
+          // all — printing a declining target turned an expected fatigue
+          // outcome into a ceiling (set 4 at "5 reps" got logged as 5 even
+          // when the honest answer at that RPE was 7). Let fatigue show up
+          // in what actually gets logged, and use it as the session's
+          // cleanest e1RM read (closest to true failure).
+          target = { ...target, isAMRAP: true, repFloor: Math.max(REP_FLOOR, ex.repMin - 2) };
+        } else if (target.estE1RM && target.weight > 0) {
+          // Model-based expectation — invert the athlete's current e1RM
+          // estimate at this set's fixed weight and ascending target RPE —
+          // rather than subtracting an arbitrary rep count from set 1's
+          // number. Shown as a range, not a single ceiling.
+          const rir = 10 - thisRPE;
+          const expected = Math.max(REP_FLOOR, Math.round((target.estE1RM / target.weight - 1) * 30 - rir));
+          target = { ...target, reps: expected, repLow: Math.max(REP_FLOOR, expected - 1), repHigh: expected + 2, e1rm: calcE1RM(target.weight, expected) };
+        }
       }
       target = { ...target, targetRPE: thisRPE };
       const analysis = analyseSetHistory(setHist);
       setTargets.push(target);
-      renderedTargets[i][si] = { weight: target.weight, reps: target.reps, targetRPE: target.targetRPE };
+      renderedTargets[i][si] = { weight: target.weight, reps: target.reps, targetRPE: target.targetRPE, isLadder: !!target.isLadder, isAMRAP: !!target.isAMRAP, repFloor: target.repFloor, repLow: target.repLow, repHigh: target.repHigh, autoregulated: !!target.autoregulated };
       setStatuses.push(analysis);
     }
 
@@ -1308,9 +1672,12 @@ async function renderExercises() {
         const curR = cur?.reps || "";
         const curRpe = cur?.rpe || "";
         const e1rmNow = curW && curR ? calcE1RM_RPE(parseFloat(curW), parseFloat(curR), curRpe) : 0;
-        setsHTML += `<div class="set-row" style="margin-bottom:6px">
-          <div class="set-num">S${si+1}</div>
-          <div class="set-target">→ <span class="target-val">${target.weight}lb × ${target.reps}</span> <span class="target-rpe">@RPE${target.targetRPE}</span></div>
+        const repDisplay = target.isAMRAP ? `${target.repFloor}+` : (target.repLow != null ? `${target.repLow}–${target.repHigh}` : target.reps);
+        const amrapTag = target.isAMRAP ? ' <span class="target-amrap" title="Last set — go to your target RPE, log whatever you actually get">AMRAP</span>' : "";
+        const autoTag = target.autoregulated ? ' <span class="target-auto" title="Adjusted from an earlier sets actual RPE this session">●</span>' : "";
+        setsHTML += `<div class="set-row${target.isLadder ? " ladder" : ""}" style="margin-bottom:6px">
+          <div class="set-num">S${si+1}${target.isLadder ? ' <span class="ladder-badge" title="Testing the next dumbbell size — the rest of your sets stay at the current weight">🪜</span>' : ""}</div>
+          <div class="set-target">→ <span class="target-val">${target.weight}lb × ${repDisplay}</span>${amrapTag}${autoTag} <span class="target-rpe">@RPE${target.targetRPE}</span></div>
           <input type="number" class="set-w" data-ex="${i}" data-set="${si}" placeholder="lb" value="${curW}" />
           <input type="number" class="set-r" data-ex="${i}" data-set="${si}" placeholder="reps" value="${curR}" />
           <input type="number" class="set-rpe" data-ex="${i}" data-set="${si}" placeholder="RPE" min="1" max="10" step="0.5" value="${curRpe}" title="Rate of Perceived Exertion 1–10" />
@@ -1388,12 +1755,63 @@ function addExerciseToActiveDay(){
   });
 }
 
+// True per-set autoregulation. checkFirstSetStruggle (below) only ever
+// reacts to SET 1's actual reps, with a severe-miss threshold — "if set 2 or
+// set 3 falls apart, nothing happens" (GAP-ANALYSIS.md §1.2). This runs
+// after ANY set's RPE is known and compares it to what THIS session's own
+// ascending schedule planned for that set — not last session's history —
+// nudging the next UNLOGGED set's live weight when today's effort is
+// running meaningfully hotter or colder than planned. Deliberately a nudge,
+// not a re-plan: thresholds are conservative and the next set is only ever
+// touched before the lifter has started it.
+function autoregulateNextSet(exIdx, setIdx) {
+  const ex = (activeExArray()||[])[exIdx];
+  if (!ex || ex.unilateral) return;
+  if (renderedTargets[exIdx]?.[setIdx]?.isLadder) return; // experimental ladder set — different rules entirely
+
+  const nextIdx = setIdx + 1;
+  if (nextIdx >= ex.sets) return; // no set left to adjust
+  const nextLogged = liveLog[exIdx]?.sets?.[nextIdx];
+  if (nextLogged?.weight || nextLogged?.reps || nextLogged?.hit) return; // already started under the lifter's hands — don't move it
+
+  const actualRpe = parseFloat(liveLog[exIdx]?.sets?.[setIdx]?.rpe);
+  const plannedRpe = renderedTargets[exIdx]?.[setIdx]?.targetRPE;
+  if (isNaN(actualRpe) || plannedRpe == null) return;
+  const nextTarget = renderedTargets[exIdx]?.[nextIdx];
+  if (!nextTarget) return;
+
+  const delta = actualRpe - plannedRpe;
+  let pct = 0;
+  if (delta >= 1)        pct = -Math.min(0.05, 0.02 * delta);  // ran hotter than planned -> trim the next set a little
+  else if (delta <= -1.5) pct =  Math.min(0.03, 0.015 * -delta); // notably more reserve than planned -> small bump
+  if (!pct) return;
+
+  const increment = getLoadIncrement(ex.name) >= 5 ? 5 : 2.5;
+  const adjustedWeight = roundToNearest((nextTarget.weight || 0) * (1 + pct), increment);
+  if (adjustedWeight === nextTarget.weight) return; // equipment can't express a change this small — leave it alone
+
+  if (!sessionAutoAdjust[exIdx]) sessionAutoAdjust[exIdx] = {};
+  sessionAutoAdjust[exIdx][nextIdx] = pct;
+  renderExercises();
+}
+
 function checkFirstSetStruggle(exIdx, setIdx) {
   if (setIdx !== 0) return;
   const ex = (activeExArray()||[])[exIdx];
   if (!ex || ex.unilateral) return;
   const st = liveLog[exIdx]?.sets?.[0];
   const card = document.querySelector(`.exercise-card[data-idx="${exIdx}"]`);
+
+  // EXPERIMENTAL ladder set (not yet shipped): set 1 is deliberately a
+  // heavier, lower-rep TEST of the next dumbbell size — coming up short is
+  // an expected, informative outcome for computeTarget to read next
+  // session, not a sign the proven base weight needs a backoff. Without
+  // this guard, a missed ladder attempt would incorrectly suggest cutting
+  // the already-proven working weight.
+  if (renderedTargets[exIdx]?.[0]?.isLadder) {
+    if (card) card.querySelector(".ex-alert.struggle")?.remove();
+    return;
+  }
 
   if (!st?.reps) {
     if (card) card.querySelector(".ex-alert.struggle")?.remove();
@@ -1497,21 +1915,22 @@ function bindExerciseInputs(container, curEx) {
   // the initial estimate rather than being ignored.
   container.querySelectorAll(".set-r").forEach(inp => {
     inp.addEventListener("blur", e => {
-      const i=parseInt(e.target.dataset.ex);
-      const st = liveLog[i]?.sets?.[parseInt(e.target.dataset.set)];
-      if (st?.weight && st?.reps && curEx[i]) startRestTimer(computeRestSeconds(curEx[i], st.rpe));
+      const i=parseInt(e.target.dataset.ex), si=parseInt(e.target.dataset.set);
+      const st = liveLog[i]?.sets?.[si];
+      if (st?.weight && st?.reps && curEx[i]) startRestTimer(computeRestSeconds(restClassificationFor(i, si, curEx[i]), st.rpe));
     });
   });
   container.querySelectorAll(".set-rpe").forEach(inp => {
     inp.addEventListener("blur", e => {
-      const i=parseInt(e.target.dataset.ex);
-      const st = liveLog[i]?.sets?.[parseInt(e.target.dataset.set)];
+      const i=parseInt(e.target.dataset.ex), si=parseInt(e.target.dataset.set);
+      const st = liveLog[i]?.sets?.[si];
       // Only restart an already-running timer for THIS set — don't start one
       // from an isolated RPE entry with no weight/reps, and don't clobber a
       // timer from a different exercise/set that's already counting down.
       if (st?.weight && st?.reps && st?.rpe && curEx[i] && restTimerInterval) {
-        startRestTimer(computeRestSeconds(curEx[i], st.rpe));
+        startRestTimer(computeRestSeconds(restClassificationFor(i, si, curEx[i]), st.rpe));
       }
+      if (st?.weight && st?.reps && st?.rpe) autoregulateNextSet(i, si);
     });
   });
 
@@ -1559,7 +1978,7 @@ function bindExerciseInputs(container, curEx) {
         // session's planned target RPE as the best available estimate; the
         // .set-rpe blur handler above will restart with the real number if
         // the user fills one in afterward.
-        if (curEx[i]) startRestTimer(computeRestSeconds(curEx[i], liveLog[i].sets[si].rpe || target.targetRPE));
+        if (curEx[i]) startRestTimer(computeRestSeconds(restClassificationFor(i, si, curEx[i]), liveLog[i].sets[si].rpe || target.targetRPE));
       } else {
         liveLog[i].sets[si].hit = false;
         btn.classList.remove("hit");
@@ -1719,7 +2138,7 @@ function renderLastSession() {
 
 // ── Day buttons ───────────────────────────────────────────────────────────────
 function selectDay(d) {
-  activeDay=d; liveLog={}; liveNote={}; struggleSetAdded={};
+  activeDay=d; liveLog={}; liveNote={}; struggleSetAdded={}; sessionAutoAdjust = {};
   stopRestTimer();
   overrideMode=false; overrideExercises=null;
   clearPersistedOverrideState();
@@ -1728,6 +2147,7 @@ function selectDay(d) {
   document.getElementById("override-hint")?.classList.add("hidden");
   document.getElementById("workout-alert").classList.add("hidden");
   document.getElementById("session-review-box").classList.add("hidden");
+  document.getElementById("muscle-feedback-box").classList.add("hidden");
   renderDayButtons(); renderExercises(); renderLastSession(); renderUpNextBanner();
 }
 function renderDayButtons() {
@@ -1778,7 +2198,15 @@ async function saveSession() {
       } else {
         if (!st.weight&&!st.reps) return;
         hasData=true;
-        rows.push([cleanSessDate,dayLabel,ex.name,si+1,st.weight||"",st.reps||"",liveNote[i]||"",sessionKey,st.rpe||"",st.hit?"1":"0"]);
+        // Tag set 1's OWN row (not the others) when the app actually
+        // rendered it as a ladder-test offer this session — a real marker
+        // for future sessions to key off, instead of only ever inferring a
+        // ladder attempt from the weight pattern. See getSetHistory/
+        // computeTarget's ladder detection.
+        const noteText = (si === 0 && renderedTargets[i]?.[0]?.isLadder)
+          ? `${liveNote[i]||""} ${LADDER_TAG}`.trim()
+          : (liveNote[i]||"");
+        rows.push([cleanSessDate,dayLabel,ex.name,si+1,st.weight||"",st.reps||"",noteText,sessionKey,st.rpe||"",st.hit?"1":"0"]);
       }
     });
   });
@@ -1788,6 +2216,7 @@ async function saveSession() {
   const btn=document.getElementById("save-btn");
   btn.disabled=true; btn.textContent="Saving..."; setSyncStatus("saving");
   document.getElementById("session-review-box").classList.add("hidden");
+  document.getElementById("muscle-feedback-box").classList.add("hidden");
 
   try {
     await sheetsCall({ action:"clear", sessionKey });
@@ -1847,7 +2276,7 @@ async function saveSession() {
 
     sessions=parseSessionRows((await sheetsCall({action:"read"})).rows);
     setSyncStatus("synced");
-    liveLog={}; liveNote={}; struggleSetAdded={};
+    liveLog={}; liveNote={}; struggleSetAdded={}; sessionAutoAdjust = {};
     stopRestTimer();
     clearLocalSession(); // session is saved for real now — the local safety net is no longer needed
     renderUpNextBanner(); // last-trained dates just changed
@@ -1895,6 +2324,8 @@ async function saveSession() {
     renderDayButtons(); renderExercises(); renderLastSession();
     toast(`Saved${changes.length?" — "+changes.filter(c=>c.dir==="up").length+" set(s) progressed":""}${extraMsg}`);
 
+    renderMuscleFeedbackCard(musclesTrainedFromRows(rows));
+
     // Fire-and-forget: doesn't block the save flow or re-enable of the button below.
     requestSessionReview(sessionKey, dayLabel, cleanSessDate);
   } catch(e) {
@@ -1902,6 +2333,85 @@ async function saveSession() {
     toast("Save failed: "+e.message);
   }
   btn.disabled=false; btn.textContent="Save Session →";
+}
+
+// ── Post-session muscle feedback ─────────────────────────────────────────────
+// Two taps per muscle trained today, feeding volumeDeltaFromFeedback() above —
+// this is what replaced the calendar-based volume ramp with something that
+// actually responds to the athlete. See GAP-ANALYSIS.md §1.6.
+const MF_SORENESS_OPTIONS = [
+  { val:1, label:"No soreness at all" },
+  { val:2, label:"Healed well before this session" },
+  { val:3, label:"Just barely healed in time" },
+  { val:4, label:"Still sore" },
+];
+const MF_PERFORMANCE_OPTIONS = [
+  { val:1, label:"Exceeded targets easily" },
+  { val:2, label:"Hit targets as planned" },
+  { val:3, label:"Struggled to hit targets" },
+  { val:4, label:"Couldn't match last session" },
+];
+let pendingMuscleFeedback = {}; // { group: {soreness, performance} } — filled in as the user taps
+
+// Muscles actually trained this session, ranked by fractional hard-set-
+// equivalent credit from CONTRIBUTIONS. A muscle only gets a feedback prompt
+// once today's session gave it roughly a hard set or more of stimulus —
+// skips muscles that only picked up a token secondary hit.
+function musclesTrainedFromRows(rows) {
+  const totals = {};
+  rows.forEach(row => {
+    const exName = row[2], weight = row[4], reps = row[5];
+    const wStr = String(weight||""), rStr = String(reps||"");
+    if (wStr.includes("L:") || rStr.includes("L:")) return; // unilateral rows — different format, skip
+    if (!isWorkingSet(weight, reps)) return;
+    Object.entries(getMuscleContributions(exName)).forEach(([group, frac]) => {
+      if (group === "Other") return;
+      totals[group] = (totals[group]||0) + frac;
+    });
+  });
+  return Object.entries(totals).filter(([,v]) => v >= 1).sort((a,b)=>b[1]-a[1]).map(([g])=>g);
+}
+
+function renderMuscleFeedbackCard(muscles) {
+  const box = document.getElementById("muscle-feedback-box");
+  if (!box) return;
+  if (!muscles.length) { box.classList.add("hidden"); return; }
+  pendingMuscleFeedback = {};
+  const body = document.getElementById("muscle-feedback-body");
+  body.innerHTML = muscles.map(group => `
+    <div class="mf-row" data-group="${group}">
+      <div class="mf-row-name">${group}</div>
+      <div class="mf-group-label">Soreness recovery</div>
+      <div class="mf-options" data-field="soreness">
+        ${MF_SORENESS_OPTIONS.map(o=>`<button type="button" class="mf-opt" data-val="${o.val}">${o.label}</button>`).join("")}
+      </div>
+      <div class="mf-group-label">Performance vs last time</div>
+      <div class="mf-options" data-field="performance">
+        ${MF_PERFORMANCE_OPTIONS.map(o=>`<button type="button" class="mf-opt" data-val="${o.val}">${o.label}</button>`).join("")}
+      </div>
+    </div>
+  `).join("");
+  body.querySelectorAll(".mf-opt").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const row = btn.closest(".mf-row");
+      const group = row.dataset.group;
+      const field = btn.closest(".mf-options").dataset.field;
+      row.querySelector(`.mf-options[data-field="${field}"]`).querySelectorAll(".mf-opt").forEach(b=>b.classList.remove("selected"));
+      btn.classList.add("selected");
+      if (!pendingMuscleFeedback[group]) pendingMuscleFeedback[group] = {};
+      pendingMuscleFeedback[group][field] = parseInt(btn.dataset.val, 10);
+    });
+  });
+  box.classList.remove("hidden");
+}
+
+function submitMuscleFeedback() {
+  let count = 0;
+  Object.entries(pendingMuscleFeedback).forEach(([group, fb]) => {
+    if (fb.soreness && fb.performance) { setMuscleFeedback(group, fb.soreness, fb.performance); count++; }
+  });
+  document.getElementById("muscle-feedback-box").classList.add("hidden");
+  if (count) { toast(`Feedback saved for ${count} muscle${count>1?"s":""} — factored into next week's sets`); renderExercises(); }
 }
 
 // ── AI: end-of-session review ────────────────────────────────────────────────
@@ -2198,7 +2708,7 @@ document.getElementById("feeling-submit").addEventListener("click", async () => 
           };
         });
         persistExercises();
-        liveLog = {}; liveNote = {}; struggleSetAdded = {};
+        liveLog = {}; liveNote = {}; struggleSetAdded = {}; sessionAutoAdjust = {};
         clearLocalSession(); // plan just changed — any prior local snapshot is for the old plan
         document.getElementById("feeling-modal").classList.add("hidden");
         renderDayButtons(); renderExercises(); renderLastSession();
@@ -2393,7 +2903,7 @@ document.getElementById("redesign-approve").addEventListener("click", () => {
   }));
   lsSet("il:exercises", exercises); // always the PERMANENT program — never routed through override state
   document.getElementById("redesign-modal").classList.add("hidden");
-  if (activeDay === redesignDay) { liveLog = {}; liveNote = {}; struggleSetAdded = {}; clearLocalSession(); renderExercises(); }
+  if (activeDay === redesignDay) { liveLog = {}; liveNote = {}; struggleSetAdded = {}; sessionAutoAdjust = {}; clearLocalSession(); renderExercises(); }
   toast(`${getDayLabel(redesignDay)} redesigned`);
 });
 
@@ -2515,11 +3025,18 @@ async function renderVolumeTab() {
     setSyncStatus("synced");
   } catch(e) { setSyncStatus("error",e.message); }
 
-  // Count sets per muscle group — split into HARD sets (RPE≥7 or unmarked working
-  // sets) vs total. Hard sets are what drive hypertrophy; junk sets (RPE≤6) don't.
+  // Count FRACTIONAL sets per muscle — a set credits every muscle in its
+  // CONTRIBUTIONS vector by that muscle's weight (1.0 direct, 0.5 secondary),
+  // not just its single "primary" group. Bench press now shows up in triceps
+  // and shoulder volume too, at half weight, instead of contributing zero —
+  // see the CONTRIBUTIONS comment for the rationale. Split into HARD
+  // fractional sets (RPE≥7 or unmarked working sets) vs total; hard sets are
+  // what drive hypertrophy, junk sets (RPE≤6) don't.
   const muscleHard={}, muscleTotal={};
-  Object.keys(MUSCLE_GROUPS_MAP).forEach(g=>{muscleHard[g]=0;muscleTotal[g]=0;});
-  // RPE distribution across all logged sets this week
+  [...MUSCLE_GROUPS, "Other"].forEach(g=>{muscleHard[g]=0;muscleTotal[g]=0;});
+  // RPE distribution across all logged sets this week (per SET, not per
+  // muscle credited — a set's effort is counted once regardless of how many
+  // muscles its volume gets split across).
   const rpeDist={ "≤6":0, "7":0, "7.5":0, "8":0, "8.5":0, "9":0, "9.5":0, "10":0 };
   let rpeLogged=0, rpeTotal=0;
   for(let i=1;i<weekRows.length;i++){
@@ -2529,31 +3046,32 @@ async function renderVolumeTab() {
     const rpe=row[8];               // 9th column
     // Skip junk rows — abandoned/mis-logged sets don't count as volume.
     if(!isWorkingSet(weight, reps)) continue;
-    const group=getMuscleGroup(exName);
-    if(muscleTotal[group]!==undefined){
-      muscleTotal[group]++;
-      const rpeVal=parseFloat(rpe);
-      // A set counts as "hard" if RPE≥7, OR if no RPE was logged (assume it was a
-      // real working set — you don't log warmups here).
-      const isHard = isNaN(rpeVal) ? true : rpeVal>=HARD_SET_RPE;
-      if(isHard) muscleHard[group]++;
-      // distribution
-      rpeTotal++;
-      if(!isNaN(rpeVal)){
-        rpeLogged++;
-        if(rpeVal<=6) rpeDist["≤6"]++;
-        else if(rpeVal<7.5) rpeDist["7"]++;
-        else if(rpeVal<8) rpeDist["7.5"]++;
-        else if(rpeVal<8.5) rpeDist["8"]++;
-        else if(rpeVal<9) rpeDist["8.5"]++;
-        else if(rpeVal<9.5) rpeDist["9"]++;
-        else if(rpeVal<10) rpeDist["9.5"]++;
-        else rpeDist["10"]++;
-      }
+    const rpeVal=parseFloat(rpe);
+    // A set counts as "hard" if RPE≥7, OR if no RPE was logged (assume it was a
+    // real working set — you don't log warmups here).
+    const isHard = isNaN(rpeVal) ? true : rpeVal>=HARD_SET_RPE;
+    const contributions = getMuscleContributions(exName);
+    Object.entries(contributions).forEach(([group, frac]) => {
+      if (muscleTotal[group]===undefined) return;
+      muscleTotal[group]+=frac;
+      if(isHard) muscleHard[group]+=frac;
+    });
+    rpeTotal++;
+    if(!isNaN(rpeVal)){
+      rpeLogged++;
+      if(rpeVal<=6) rpeDist["≤6"]++;
+      else if(rpeVal<7.5) rpeDist["7"]++;
+      else if(rpeVal<8) rpeDist["7.5"]++;
+      else if(rpeVal<8.5) rpeDist["8"]++;
+      else if(rpeVal<9) rpeDist["8.5"]++;
+      else if(rpeVal<9.5) rpeDist["9"]++;
+      else if(rpeVal<10) rpeDist["9.5"]++;
+      else rpeDist["10"]++;
     }
   }
 
-  // Volume bars — hard sets vs per-muscle MEV/MRV landmarks
+  // Volume bars — fractional hard sets vs per-muscle MEV/MRV landmarks
+  const fmtSets = n => Number.isInteger(n) ? String(n) : n.toFixed(1);
   const barsEl=document.getElementById("volume-bars"); barsEl.innerHTML="";
   Object.entries(muscleHard).sort((a,b)=>b[1]-a[1]).forEach(([group,hard])=>{
     if(group==="Other" && muscleTotal[group]===0) return;
@@ -2563,9 +3081,9 @@ async function renderVolumeTab() {
     const pct=Math.min((hard/mrv)*100,100);
     // MEV marker position on the track
     const mevPct=Math.min((mev/mrv)*100,100);
-    const junkNote = total>hard ? ` <span style="color:#666">(${total-hard} junk)</span>` : "";
+    const junkNote = total>hard+0.01 ? ` <span style="color:#666">(${fmtSets(total-hard)} junk)</span>` : "";
     const div=document.createElement("div"); div.className="vol-bar-row";
-    div.innerHTML=`<div class="vol-bar-label"><span class="vol-bar-name">${group}</span><span class="vol-bar-count ${status}">${hard} hard${junkNote}</span></div><div class="vol-bar-track"><div class="vol-bar-mev" style="left:${mevPct}%" title="MEV ${mev}"></div><div class="vol-bar-fill ${status}" style="width:${pct}%"></div></div><div class="vol-bar-range">MEV ${mev} · MRV ${mrv}</div>`;
+    div.innerHTML=`<div class="vol-bar-label"><span class="vol-bar-name">${group}</span><span class="vol-bar-count ${status}">${fmtSets(hard)} hard${junkNote}</span></div><div class="vol-bar-track"><div class="vol-bar-mev" style="left:${mevPct}%" title="MEV ${mev}"></div><div class="vol-bar-fill ${status}" style="width:${pct}%"></div></div><div class="vol-bar-range">MEV ${mev} · MRV ${mrv}</div>`;
     div.querySelector(".vol-bar-name").style.cursor="pointer";
     div.querySelector(".vol-bar-name").addEventListener("click",()=>editLandmark(group));
     barsEl.appendChild(div);
@@ -2729,6 +3247,12 @@ async function init() {
   document.getElementById("vol-next").addEventListener("click",()=>{volWeekOffset++;renderVolumeTab();});
 
   document.getElementById("save-btn").addEventListener("click",saveSession);
+  document.getElementById("mf-save").addEventListener("click",submitMuscleFeedback);
+  document.getElementById("mf-skip").addEventListener("click",()=>document.getElementById("muscle-feedback-box").classList.add("hidden"));
+  const ladderToggle=document.getElementById("ladder-toggle");
+  ladderToggle.checked=isLadderEnabled();
+  ladderToggle.addEventListener("change",e=>{ setLadderEnabled(e.target.checked); toast(e.target.checked?"Ladder-set testing on":"Ladder-set testing off"); });
+  document.getElementById("restore-backup-btn").addEventListener("click",restoreProgramFromServer);
   document.getElementById("bw-save").addEventListener("click",saveBw);
   document.getElementById("override-toggle").addEventListener("change",e=>{
     overrideMode = e.target.checked;
