@@ -991,8 +991,74 @@ function cleanDate(raw) {
   return s.trim();
 }
 function lsGet(k,fb) { try { const v=localStorage.getItem(k); return v?JSON.parse(v):fb; } catch { return fb; } }
-function lsSet(k,v) { try { localStorage.setItem(k,JSON.stringify(v)); } catch {} }
+// Program state (exercises/customDays/dayLabels) still lives here as the
+// live source of truth — this just ALSO mirrors it to a Sheet-backed backup
+// in the background whenever it changes, best-effort and silent on failure.
+// See scheduleProgramBackup below and the "Restore from cloud backup" button
+// (Library tab) for the deliberately manual, never-automatic read-back path.
+const PROGRAM_BACKUP_KEYS = ["il:exercises", "il:customDays", "il:dayLabels"];
+function lsSet(k,v) {
+  try { localStorage.setItem(k,JSON.stringify(v)); } catch {}
+  if (PROGRAM_BACKUP_KEYS.includes(k)) scheduleProgramBackup();
+}
 function roundToNearest(val, nearest) { return Math.round(val / nearest) * nearest; }
+
+// Single-user token for the additive program-backup endpoint (see
+// GAP-ANALYSIS.md §5/Phase 0). Generated once on this device and sent with
+// every backup/restore call; the backend accepts whatever token the FIRST
+// caller ever sends and requires an exact match after that. This is NOT
+// real security — a token embedded in client JS is readable by anyone who
+// views source — it just raises the bar above a fully open endpoint. Good
+// enough for a single-user hobby deployment, not a substitute for real auth
+// if this app ever becomes multi-user (open decision, see GAP-ANALYSIS.md §7.6).
+function getAuthToken() {
+  let t = null;
+  try { t = localStorage.getItem("il:authToken"); } catch {}
+  if (!t) {
+    t = (crypto && crypto.randomUUID) ? crypto.randomUUID() : (Date.now().toString(36) + Math.random().toString(36).slice(2));
+    try { localStorage.setItem("il:authToken", t); } catch {}
+  }
+  return t;
+}
+
+let programBackupTimer = null;
+function scheduleProgramBackup() {
+  clearTimeout(programBackupTimer);
+  programBackupTimer = setTimeout(backupProgramToServer, 2000); // debounce rapid successive edits
+}
+async function backupProgramToServer() {
+  try {
+    const program = {
+      exercises: lsGet("il:exercises", null),
+      customDays: lsGet("il:customDays", []),
+      dayLabels: lsGet("il:dayLabels", {}),
+    };
+    if (!program.exercises) return; // nothing to back up yet (pre-init)
+    await sheetsCall({ action:"save_program", token:getAuthToken(), program:JSON.stringify(program) });
+  } catch (e) { /* best-effort — localStorage remains authoritative, silently retried on the next edit */ }
+}
+
+// Deliberately manual, never automatic: fetches the server backup and, only
+// after the user reviews and confirms what it found, replaces local program
+// state. Never called from app init or any background path.
+async function restoreProgramFromServer() {
+  try {
+    const d = await sheetsCall({ action:"load_program", token:getAuthToken() });
+    if (!d.program) { toast("No cloud backup found yet"); return; }
+    const program = JSON.parse(d.program);
+    const dayCount = Object.keys(program.exercises || {}).length;
+    const when = d.updatedAt ? new Date(d.updatedAt).toLocaleString() : "an unknown time";
+    if (!confirm(`Cloud backup from ${when} has ${dayCount} day(s) programmed. Replace your CURRENT local program with it? This cannot be undone.`)) return;
+    lsSet("il:exercises", program.exercises || {});
+    lsSet("il:customDays", program.customDays || []);
+    lsSet("il:dayLabels", program.dayLabels || {});
+    exercises = program.exercises || {};
+    customDays = program.customDays || [];
+    dayLabels = program.dayLabels || {};
+    toast("Program restored from cloud backup");
+    renderDayButtons(); renderExercises();
+  } catch (e) { toast("Restore failed: " + e.message); }
+}
 
 // Suggested warmup ramp for a compound lift's working weight — three
 // ascending, descending-rep sets (standard ramping scheme) so the top set
@@ -3186,6 +3252,7 @@ async function init() {
   const ladderToggle=document.getElementById("ladder-toggle");
   ladderToggle.checked=isLadderEnabled();
   ladderToggle.addEventListener("change",e=>{ setLadderEnabled(e.target.checked); toast(e.target.checked?"Ladder-set testing on":"Ladder-set testing off"); });
+  document.getElementById("restore-backup-btn").addEventListener("click",restoreProgramFromServer);
   document.getElementById("bw-save").addEventListener("click",saveBw);
   document.getElementById("override-toggle").addEventListener("change",e=>{
     overrideMode = e.target.checked;

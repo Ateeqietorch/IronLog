@@ -15,7 +15,9 @@ A complete reference for how the app actually works today, as of the current `ma
 - **PWA:** installable to a home screen, with a service worker for offline app-shell caching (§10).
 
 ### Known, deliberately-unfixed gap
-The Apps Script web app has no authentication — it's deployed `ANYONE_ANONYMOUS`, and its URL is visible in the public `app.js` source. Anyone who finds the URL could read/write the Sheet or trigger Claude API calls billed to the owner's key. Flagged during an audit; the owner chose not to add a PIN/token gate for now.
+The Apps Script web app has no authentication on its ORIGINAL actions (session read/write, drafts, bodyweight, all five AI actions) — it's deployed `ANYONE_ANONYMOUS`, and its URL is visible in the public `app.js` source. Anyone who finds the URL could read/write the Sheet or trigger Claude API calls billed to the owner's key. Flagged during an audit; the owner chose not to add a PIN/token gate for those actions for now.
+
+The two NEWER `save_program`/`load_program` actions (§3a, program backup) ARE token-gated — see there for what that does and doesn't protect against. This was a deliberate first, additive step (GAP-ANALYSIS.md Phase 0) rather than retrofitting auth onto the whole endpoint, which the owner chose not to risk doing blind against a live single-user deployment.
 
 ---
 
@@ -54,6 +56,13 @@ A day's *internal* key (e.g. `"Day 3 — Legs"`) never changes — it's how ever
 
 ### Custom days
 Beyond the 5 defaults, you can accumulate custom days (`il:customDays`) — created either from the Library, or by saving an override session as a new day (§8).
+
+### Program backup (Library tab)
+Program state (`il:exercises`, `il:customDays`, `il:dayLabels`) still lives ONLY in localStorage as far as what the app actually reads — clearing your browser still wipes it, same as always. What's new: every time program state changes, `lsSet` (the localStorage write helper) also fires a debounced (2s) background call to a `save_program` backend action, which mirrors a JSON snapshot into a new "Programs" sheet tab. Best-effort and silent on failure — if the network call fails, nothing in the app notices or breaks; the next edit just tries again.
+
+Reading it back is deliberately NOT automatic. A "Restore from cloud backup" button (Library tab) calls `load_program`, shows what it found (when it was saved, how many days), and only replaces local state after an explicit confirm. This is intentionally the conservative half of a two-step rollout (GAP-ANALYSIS.md Phase 0): a real backup exists now; automatic reconciliation on load (so a fresh device or a wiped browser picks it up without a manual step) is a later, separate change once this has been proven live.
+
+**Auth:** both actions require a token (`e.parameter.token`), generated once per device (`il:authToken`) and accepted by the backend on whichever request arrives first (`checkAuthToken`'s bootstrap-on-first-use), then required to match exactly after that. This is NOT real security — the token lives in client-side JS, readable by anyone who views source — it only raises the bar above a fully open endpoint. Every other action (sessions, drafts, bodyweight, the five AI actions) remains completely unauthenticated, unchanged from before — see §1's known gap.
 
 ---
 

@@ -3,6 +3,7 @@ const DRAFTS_SHEET     = "Drafts";
 const BODYWEIGHT_SHEET = "Bodyweight";
 const SWAPS_SHEET       = "ExerciseSwaps";
 const SUMMARIES_SHEET   = "SessionSummaries";
+const PROGRAMS_SHEET    = "Programs";
 const CLAUDE_MODEL       = "claude-sonnet-5";
 
 // Explicit training goal, threaded into every AI prompt that proposes or
@@ -121,6 +122,36 @@ function doGet(e) {
     if (action === "delete_bodyweight") {
       clearByKey(ss.getSheetByName(BODYWEIGHT_SHEET), e.parameter.date, 0);
       return respond({ ok: true, msg: "bodyweight deleted" });
+    }
+
+    // ── Program backup (additive, opt-in) ──────────────────────────────────────
+    // Server-side copy of program state (exercises/customDays/dayLabels), which
+    // otherwise lives ONLY in localStorage — clearing the browser wipes it with
+    // no recovery. This is a BACKUP, not the source of truth: the client still
+    // reads/writes localStorage as before on every session; these two actions
+    // just mirror it here in the background (save_program, fire-and-forget) and
+    // let the user pull a copy back manually (load_program, via an explicit
+    // "Restore from cloud backup" action — never automatic, never silent).
+    // Token-gated via checkAuthToken's bootstrap-on-first-use: this raises the
+    // bar above a fully open endpoint, but a token embedded in client-side JS
+    // is not real secrecy — anyone who reads the deployed JS can find it. It's
+    // sized for "not casually discoverable by scanning," not for hostile actors.
+    if (action === "save_program") {
+      if (!checkAuthToken(e.parameter.token)) return respond({ ok: false, msg: "unauthorized" });
+      const sheet = getOrCreateSheet(ss, PROGRAMS_SHEET, ["UpdatedAt", "ProgramJSON"]);
+      const lastRow = sheet.getLastRow();
+      if (lastRow > 1) sheet.deleteRows(2, lastRow - 1);
+      sheet.appendRow([new Date().toISOString(), e.parameter.program]);
+      return respond({ ok: true, msg: "program backed up" });
+    }
+
+    if (action === "load_program") {
+      if (!checkAuthToken(e.parameter.token)) return respond({ ok: false, msg: "unauthorized" });
+      const sheet = getOrCreateSheet(ss, PROGRAMS_SHEET, ["UpdatedAt", "ProgramJSON"]);
+      const data  = sheet.getDataRange().getValues();
+      if (data.length < 2) return respond({ ok: true, program: null });
+      const [updatedAt, programJson] = data[1];
+      return respond({ ok: true, program: programJson, updatedAt: String(updatedAt) });
     }
 
     // ── AI: per-exercise reconsideration ───────────────────────────────────────
@@ -415,6 +446,23 @@ function doGet(e) {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+// Bootstrap-on-first-use: no token is set up in advance. The FIRST call to a
+// token-gated action stores whatever token the client sent as the accepted
+// one from then on; every later call must match it. Reasonable for a
+// single-user deployment where the legitimate client is expected to be the
+// first caller after each new deployment — not a substitute for real auth if
+// this were ever multi-user.
+function checkAuthToken(providedToken) {
+  if (!providedToken) return false;
+  const props  = PropertiesService.getScriptProperties();
+  const stored = props.getProperty("PROGRAM_AUTH_TOKEN");
+  if (!stored) {
+    props.setProperty("PROGRAM_AUTH_TOKEN", providedToken);
+    return true;
+  }
+  return stored === providedToken;
+}
+
 function clearByKey(sheet, keyValue, colIndex) {
   const data = sheet.getDataRange().getValues();
   for (let i = data.length - 1; i >= 1; i--) {
