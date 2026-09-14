@@ -46,8 +46,8 @@ Five hardcoded days (`DEFAULTS`), each a list of exercises: **Day 1 — Push, Da
 ### Exercise Repository
 A separate library of 50+ exercises (`EXERCISE_REPO`), each tagged with a `group` (muscle group) and a sensible default rep range/weight. This is what populates the Library tab and the "swap exercise" / "add exercise" pickers — it's independent of what's currently in your program.
 
-### Muscle groups
-`MUSCLE_GROUPS_MAP` assigns every known exercise name to one of: Chest, Shoulders, Triceps, Back, Biceps, Quads, Hamstrings, Glutes, Calves (anything unmatched falls into "Other"). This mapping drives volume tracking, the rest timer's muscle-size scaling, and mesocycle volume ramping. **Ab/core work is deliberately not in this map or the repo** — see §7's ab/core-awareness note.
+### Muscle groups and fractional volume credit
+Every exercise in `CONTRIBUTIONS` carries a **contribution vector** — e.g. Barbell Bench Press is `{Chest:1.0, Triceps:0.5, Shoulders:0.5}` — rather than membership in a single group. A set credits every muscle in its vector by that fraction (1.0 = prime mover, 0.5 = a meaningful secondary), so bench press volume now shows up as real (half-weight) triceps and shoulder volume instead of contributing nothing to either. This follows the 2025 Pelland/Zourdos dose-response meta-regressions, which found fractional direct/indirect counting the best-fitting of the methods they compared. `getMuscleGroup(exName)` derives a single "primary" group (the vector's highest-weighted entry) for the places that still need one: fatigue scoring, mesocycle volume ramping, swap suggestions. The legacy `MUSCLE_GROUPS_MAP` (exercise name → one group, fuzzy-matched by substring) is kept only as the final fallback for exercise names with no contribution vector — a custom name typed via swap or log-by-description. **Ab/core work is deliberately not in either map** — see §7's ab/core-awareness note.
 
 ### Days: internal identity vs. display name
 A day's *internal* key (e.g. `"Day 3 — Legs"`) never changes — it's how every historical Sheet row, draft, and volume calculation identifies that day. Renaming a day (via the ✎ icon next to its button) only writes a *display label* (`il:dayLabels`), looked up wherever a name is shown. This is what lets you call it "Legs A" in the UI without orphaning past data.
@@ -213,7 +213,9 @@ Month grid; days with a logged session are dotted. Tapping a date shows that day
 An e1RM line chart per exercise (picker below it), a weight-progression history log, and a "current suggested weights" summary.
 
 ### Volume
-Weekly hard-set counts per muscle group, plotted against that muscle's MEV/MRV band (user-editable per muscle — tap a muscle name). A set counts as "hard" if its logged RPE is ≥7, **or if no RPE was logged at all** (defaults to counting, rather than penalizing sets logged without RPE). Also shows an effort (RPE) distribution and a session volume-load chart (sets × reps × weight).
+Weekly **fractional** hard-set counts per muscle, plotted against that muscle's MEV/MRV band (user-editable per muscle — tap a muscle name). A set counts as "hard" if its logged RPE is ≥7, **or if no RPE was logged at all** (defaults to counting, rather than penalizing sets logged without RPE); "hard" and "junk" counts can both be fractional (e.g. "2.5 hard (0.5 junk)") since one set often credits multiple muscles at different weights via `CONTRIBUTIONS`. Also shows an effort (RPE) distribution and a session volume-load chart (sets × reps × weight).
+
+Note: the mesocycle volume ramp (§9) still adds/cuts *whole sets per exercise* keyed on each exercise's single primary muscle group, not the fractional vector — reconciling the two is deferred to the per-muscle feedback loop described in `GAP-ANALYSIS.md` Phase 3, which is expected to replace the calendar-based ramp entirely rather than patch it to be fractional-aware.
 
 ### Weight
 Simple bodyweight log with date, a chart, and history list.

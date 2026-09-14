@@ -126,7 +126,11 @@ function setLandmark(group, mev, mrv){
   lsSet("il:landmarks", custom);
 }
 
-// Muscle group mapping for volume tracking
+// Legacy single-group membership map — kept ONLY as the final fallback for
+// exercise names that don't match anything in CONTRIBUTIONS below (a custom
+// name typed via swap/log-by-description, or a future exercise added to
+// EXERCISE_REPO without a contribution vector). Everything that ships with
+// the app should be classified in CONTRIBUTIONS instead.
 const MUSCLE_GROUPS_MAP = {
   "Chest": ["Barbell Bench Press","Incline Barbell Press","Incline Dumbbell Press","Dumbbell Bench Press","Pec Deck / Cable Fly","Cable Crossover","Dumbbell Fly","Push-Up","Incline Barbell Bench Press"],
   "Shoulders": ["Barbell Overhead Press","Dumbbell Shoulder Press","Cable Lateral Raise","Dumbbell Lateral Raise","Rear Delt Fly","Face Pull","Upright Row"],
@@ -139,11 +143,105 @@ const MUSCLE_GROUPS_MAP = {
   "Calves": ["Standing Calf Raise","Seated Calf Raise","Single Leg Calf Raise"],
 };
 
-function getMuscleGroup(exName) {
-  for (const [group, exercises] of Object.entries(MUSCLE_GROUPS_MAP)) {
-    if (exercises.some(e => exName.toLowerCase().includes(e.toLowerCase()) || e.toLowerCase().includes(exName.toLowerCase()))) return group;
+// Per-exercise muscle CONTRIBUTION vectors — 1.0 for the prime mover, 0.5 for
+// a meaningful secondary/synergist, nothing for muscles the movement doesn't
+// meaningfully load. Replaces single-group attribution (bench press credited
+// chest and NOTHING else) with fractional counting, per the 2025
+// Pelland/Zourdos dose-response meta-regressions: classifying sets as
+// direct/indirect and weighting indirect work at 0.5 produced the
+// best-fitting dose-response model of the three methods they compared. This
+// is a judgment call per movement, not a measurement — treat the 0.5s as
+// "roughly half the stimulus," not a precise figure.
+const CONTRIBUTIONS = {
+  "Barbell Bench Press":       { Chest:1.0, Triceps:0.5, Shoulders:0.5 },
+  "Incline Barbell Press":     { Chest:1.0, Shoulders:0.5, Triceps:0.4 },
+  "Incline Barbell Bench Press": { Chest:1.0, Shoulders:0.5, Triceps:0.4 }, // alias — DEFAULTS Day 3 name
+  "Incline Dumbbell Press":    { Chest:1.0, Shoulders:0.5, Triceps:0.4 },
+  "Dumbbell Bench Press":      { Chest:1.0, Triceps:0.5, Shoulders:0.4 },
+  "Pec Deck / Cable Fly":      { Chest:1.0 },
+  "Cable Crossover":           { Chest:1.0 },
+  "Dumbbell Fly":              { Chest:1.0 },
+  "Push-Up":                   { Chest:1.0, Triceps:0.5, Shoulders:0.3 },
+
+  "Barbell Overhead Press":    { Shoulders:1.0, Triceps:0.5 },
+  "Dumbbell Shoulder Press":   { Shoulders:1.0, Triceps:0.5 },
+  "Cable Lateral Raise":       { Shoulders:1.0 },
+  "Dumbbell Lateral Raise":    { Shoulders:1.0 },
+  "Rear Delt Fly":             { Shoulders:1.0, Back:0.2 },
+  "Face Pull":                 { Shoulders:1.0, Back:0.4 },
+  "Upright Row":               { Shoulders:1.0, Back:0.3 },
+
+  "Tricep Rope Pushdown":      { Triceps:1.0 },
+  "V-Bar Pushdown":            { Triceps:1.0 },
+  "Overhead Tricep Extension": { Triceps:1.0 },
+  "Tricep Dip":                { Triceps:1.0, Chest:0.5, Shoulders:0.3 },
+  "Skull Crusher":             { Triceps:1.0 },
+  "Single Arm Pushdown":       { Triceps:1.0 },
+
+  "Weighted Pull-Up":          { Back:1.0, Biceps:0.5 },
+  "Weighted Pull-Up / Lat Pulldown": { Back:1.0, Biceps:0.5 }, // alias — DEFAULTS Day 3 name
+  "Lat Pulldown":              { Back:1.0, Biceps:0.4 },
+  "Seated Cable Row":          { Back:1.0, Biceps:0.4 },
+  "Chest-Supported DB Row":    { Back:1.0, Biceps:0.4 },
+  "Chest-Supported T-Bar Row": { Back:1.0, Biceps:0.4 },
+  "Single-Arm Cable Row":      { Back:1.0, Biceps:0.4 },
+  "Single-Arm DB Row":         { Back:1.0, Biceps:0.4 },
+  "Straight Arm Pulldown":     { Back:1.0 },
+
+  "EZ Bar Curl":               { Biceps:1.0 },
+  "Barbell Curl":               { Biceps:1.0 },
+  "Incline Dumbbell Curl":     { Biceps:1.0 },
+  "Hammer Curl":                { Biceps:1.0 },
+  "Cable Curl":                 { Biceps:1.0 },
+  "Concentration Curl":        { Biceps:1.0 },
+
+  "Hack Squat":                 { Quads:1.0, Glutes:0.4 },
+  "Leg Press":                  { Quads:1.0, Glutes:0.4, Hamstrings:0.2 },
+  "Single Leg Leg Press":       { Quads:1.0, Glutes:0.4, Hamstrings:0.2 },
+  "Leg Extension":              { Quads:1.0 },
+  "Single Leg Extension":       { Quads:1.0 },
+  "Bulgarian Split Squat":      { Quads:1.0, Glutes:0.5, Hamstrings:0.2 },
+  "Walking Lunges (DB)":        { Quads:1.0, Glutes:0.5, Hamstrings:0.2 },
+
+  "Romanian Deadlift":          { Hamstrings:1.0, Glutes:0.5 },
+  "Stiff-Leg Deadlift (DB)":    { Hamstrings:1.0, Glutes:0.4 },
+  "Leg Curl":                    { Hamstrings:1.0 },
+  "Leg Curl (seated)":          { Hamstrings:1.0 },
+  "Single Leg Curl":            { Hamstrings:1.0 },
+
+  "Hip Thrust":                 { Glutes:1.0, Hamstrings:0.3 },
+  "Single Leg Hip Thrust":      { Glutes:1.0, Hamstrings:0.3 },
+  "Cable Kickback":             { Glutes:1.0 },
+
+  "Standing Calf Raise":        { Calves:1.0 },
+  "Seated Calf Raise":          { Calves:1.0 },
+  "Single Leg Calf Raise":      { Calves:1.0 },
+};
+
+// Fractional muscle credit for an exercise: { muscle: fraction }. Exact name
+// match first, then the same fuzzy substring match CONTRIBUTIONS' own aliases
+// rely on, then the legacy single-group map, so a custom/swapped-in exercise
+// name never silently drops out of volume tracking entirely.
+function getMuscleContributions(exName) {
+  if (CONTRIBUTIONS[exName]) return CONTRIBUTIONS[exName];
+  const lname = (exName || "").toLowerCase();
+  for (const [name, vec] of Object.entries(CONTRIBUTIONS)) {
+    if (lname.includes(name.toLowerCase()) || name.toLowerCase().includes(lname)) return vec;
   }
-  return "Other";
+  for (const [group, list] of Object.entries(MUSCLE_GROUPS_MAP)) {
+    if (list.some(e => lname.includes(e.toLowerCase()) || e.toLowerCase().includes(lname))) return { [group]: 1.0 };
+  }
+  return { "Other": 1.0 };
+}
+
+// Primary muscle group for an exercise — the highest-weighted entry in its
+// contribution vector. Used wherever the app needs ONE group (fatigue
+// scoring, the volume ramp, swap suggestions), as opposed to the fractional
+// vector used for volume counting itself.
+function getMuscleGroup(exName) {
+  const vec = getMuscleContributions(exName);
+  const entries = Object.entries(vec);
+  return entries.length ? entries.sort((a, b) => b[1] - a[1])[0][0] : "Other";
 }
 
 // ── Exercise Repository ───────────────────────────────────────────────────────
@@ -2621,11 +2719,18 @@ async function renderVolumeTab() {
     setSyncStatus("synced");
   } catch(e) { setSyncStatus("error",e.message); }
 
-  // Count sets per muscle group — split into HARD sets (RPE≥7 or unmarked working
-  // sets) vs total. Hard sets are what drive hypertrophy; junk sets (RPE≤6) don't.
+  // Count FRACTIONAL sets per muscle — a set credits every muscle in its
+  // CONTRIBUTIONS vector by that muscle's weight (1.0 direct, 0.5 secondary),
+  // not just its single "primary" group. Bench press now shows up in triceps
+  // and shoulder volume too, at half weight, instead of contributing zero —
+  // see the CONTRIBUTIONS comment for the rationale. Split into HARD
+  // fractional sets (RPE≥7 or unmarked working sets) vs total; hard sets are
+  // what drive hypertrophy, junk sets (RPE≤6) don't.
   const muscleHard={}, muscleTotal={};
-  Object.keys(MUSCLE_GROUPS_MAP).forEach(g=>{muscleHard[g]=0;muscleTotal[g]=0;});
-  // RPE distribution across all logged sets this week
+  [...MUSCLE_GROUPS, "Other"].forEach(g=>{muscleHard[g]=0;muscleTotal[g]=0;});
+  // RPE distribution across all logged sets this week (per SET, not per
+  // muscle credited — a set's effort is counted once regardless of how many
+  // muscles its volume gets split across).
   const rpeDist={ "≤6":0, "7":0, "7.5":0, "8":0, "8.5":0, "9":0, "9.5":0, "10":0 };
   let rpeLogged=0, rpeTotal=0;
   for(let i=1;i<weekRows.length;i++){
@@ -2635,31 +2740,32 @@ async function renderVolumeTab() {
     const rpe=row[8];               // 9th column
     // Skip junk rows — abandoned/mis-logged sets don't count as volume.
     if(!isWorkingSet(weight, reps)) continue;
-    const group=getMuscleGroup(exName);
-    if(muscleTotal[group]!==undefined){
-      muscleTotal[group]++;
-      const rpeVal=parseFloat(rpe);
-      // A set counts as "hard" if RPE≥7, OR if no RPE was logged (assume it was a
-      // real working set — you don't log warmups here).
-      const isHard = isNaN(rpeVal) ? true : rpeVal>=HARD_SET_RPE;
-      if(isHard) muscleHard[group]++;
-      // distribution
-      rpeTotal++;
-      if(!isNaN(rpeVal)){
-        rpeLogged++;
-        if(rpeVal<=6) rpeDist["≤6"]++;
-        else if(rpeVal<7.5) rpeDist["7"]++;
-        else if(rpeVal<8) rpeDist["7.5"]++;
-        else if(rpeVal<8.5) rpeDist["8"]++;
-        else if(rpeVal<9) rpeDist["8.5"]++;
-        else if(rpeVal<9.5) rpeDist["9"]++;
-        else if(rpeVal<10) rpeDist["9.5"]++;
-        else rpeDist["10"]++;
-      }
+    const rpeVal=parseFloat(rpe);
+    // A set counts as "hard" if RPE≥7, OR if no RPE was logged (assume it was a
+    // real working set — you don't log warmups here).
+    const isHard = isNaN(rpeVal) ? true : rpeVal>=HARD_SET_RPE;
+    const contributions = getMuscleContributions(exName);
+    Object.entries(contributions).forEach(([group, frac]) => {
+      if (muscleTotal[group]===undefined) return;
+      muscleTotal[group]+=frac;
+      if(isHard) muscleHard[group]+=frac;
+    });
+    rpeTotal++;
+    if(!isNaN(rpeVal)){
+      rpeLogged++;
+      if(rpeVal<=6) rpeDist["≤6"]++;
+      else if(rpeVal<7.5) rpeDist["7"]++;
+      else if(rpeVal<8) rpeDist["7.5"]++;
+      else if(rpeVal<8.5) rpeDist["8"]++;
+      else if(rpeVal<9) rpeDist["8.5"]++;
+      else if(rpeVal<9.5) rpeDist["9"]++;
+      else if(rpeVal<10) rpeDist["9.5"]++;
+      else rpeDist["10"]++;
     }
   }
 
-  // Volume bars — hard sets vs per-muscle MEV/MRV landmarks
+  // Volume bars — fractional hard sets vs per-muscle MEV/MRV landmarks
+  const fmtSets = n => Number.isInteger(n) ? String(n) : n.toFixed(1);
   const barsEl=document.getElementById("volume-bars"); barsEl.innerHTML="";
   Object.entries(muscleHard).sort((a,b)=>b[1]-a[1]).forEach(([group,hard])=>{
     if(group==="Other" && muscleTotal[group]===0) return;
@@ -2669,9 +2775,9 @@ async function renderVolumeTab() {
     const pct=Math.min((hard/mrv)*100,100);
     // MEV marker position on the track
     const mevPct=Math.min((mev/mrv)*100,100);
-    const junkNote = total>hard ? ` <span style="color:#666">(${total-hard} junk)</span>` : "";
+    const junkNote = total>hard+0.01 ? ` <span style="color:#666">(${fmtSets(total-hard)} junk)</span>` : "";
     const div=document.createElement("div"); div.className="vol-bar-row";
-    div.innerHTML=`<div class="vol-bar-label"><span class="vol-bar-name">${group}</span><span class="vol-bar-count ${status}">${hard} hard${junkNote}</span></div><div class="vol-bar-track"><div class="vol-bar-mev" style="left:${mevPct}%" title="MEV ${mev}"></div><div class="vol-bar-fill ${status}" style="width:${pct}%"></div></div><div class="vol-bar-range">MEV ${mev} · MRV ${mrv}</div>`;
+    div.innerHTML=`<div class="vol-bar-label"><span class="vol-bar-name">${group}</span><span class="vol-bar-count ${status}">${fmtSets(hard)} hard${junkNote}</span></div><div class="vol-bar-track"><div class="vol-bar-mev" style="left:${mevPct}%" title="MEV ${mev}"></div><div class="vol-bar-fill ${status}" style="width:${pct}%"></div></div><div class="vol-bar-range">MEV ${mev} · MRV ${mrv}</div>`;
     div.querySelector(".vol-bar-name").style.cursor="pointer";
     div.querySelector(".vol-bar-name").addEventListener("click",()=>editLandmark(group));
     barsEl.appendChild(div);
