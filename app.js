@@ -40,6 +40,27 @@ function getLoadIncrement(exName) {
   return isDumbbellExercise(exName) ? 5 : 2.5;
 }
 
+// Ladder-set testing (below) is opt-out, defaulting ON to match its existing
+// behavior, but a real toggle rather than silently-always-on — surfaced in
+// the Library tab.
+function isLadderEnabled() {
+  const v = lsGet("il:ladderEnabled", null);
+  return v === null ? true : !!v;
+}
+function setLadderEnabled(v) { lsSet("il:ladderEnabled", !!v); }
+
+// Explicit marker written into a set's own Notes field (saveSession) the one
+// time the app actually rendered a ladder-test offer for it — preferred over
+// inferring "was this a ladder attempt" purely from the weight pattern
+// (heavier set 1 than the rest), which can't tell a deliberate probe from an
+// ordinary session where set 1 just happened to be logged heavier. Old rows
+// saved before this existed have no tag, so callers still fall back to the
+// weight heuristic for them.
+const LADDER_TAG = "[ladder-test]";
+function isLadderTagged(notes) {
+  return typeof notes === "string" && notes.includes(LADDER_TAG);
+}
+
 // Progression load increment. ACSM guidance: increase load ~2-10% once the
 // full prescribed rep range is met comfortably. A flat lb bump (this app's
 // old approach) isn't proportional — the same +5lb is a rounding error on a
@@ -776,23 +797,20 @@ function computeTarget(ex, history, meso) {
     return { weight, reps: ex.repMin, e1rm: calcE1RM(weight, ex.repMin), reason: "deload", backoff: null };
   }
 
-  // ── EXPERIMENTAL: ladder set for coarse-increment (dumbbell) exercises ──
-  // NOT YET SHIPPED — see the write-up alongside this commit for real
-  // design tensions before this goes live.
-  //
+  // ── Ladder set for coarse-increment (dumbbell) exercises ──
   // Rather than jumping every set to the next dumbbell size at once, test
   // it with ONE set first: set 1 goes to the next weight at repMin reps
-  // while the rest hold at the already-proven weight/reps. Detected purely
-  // by comparing set 1's weight to the median of the rest in the last
-  // session's actual logged data — no separate stored state, so it stays
-  // consistent with this app treating the Sheet as the only source of
-  // truth (no shadow "am I mid-ladder-test" flag anywhere else).
-  const isDB = isDumbbellExercise(ex.name);
-  if (isDB && !holding && valid.length > 1) {
+  // while the rest hold at the already-proven weight/reps. Prefers the
+  // explicit LADDER_TAG written into a set's own Notes at save time (once
+  // the app has actually rendered this as a ladder offer); falls back to
+  // the weight pattern (set 1 heavier than the rest) for older rows saved
+  // before the tag existed. Togglable in the Library tab (isLadderEnabled).
+  const ladderOn = isDumbbellExercise(ex.name) && isLadderEnabled();
+  if (ladderOn && !holding && valid.length > 1) {
     const firstWeight = parseFloat(valid[0].weight);
     const restRows    = valid.slice(1);
     const restMedian  = median(restRows.map(r => parseFloat(r.weight)));
-    const wasLadderAttempt = firstWeight > restMedian + 0.01;
+    const wasLadderAttempt = isLadderTagged(valid[0].notes) || firstWeight > restMedian + 0.01;
     if (wasLadderAttempt) {
       const ladderReps = parseFloat(valid[0].reps);
       if (ladderReps >= ex.repMin) {
@@ -827,7 +845,7 @@ function computeTarget(ex, history, meso) {
   const undershotEffort = medRPE !== null && medRPE <= midTargetRPE - 1 && medReps >= repCeiling - 1;
 
   if (!holding && (hitRatio >= 0.75 || undershotEffort)) {
-    if (isDB) {
+    if (ladderOn) {
       // First time hitting the rep ceiling on a dumbbell exercise — offer a
       // ladder test on set 1 instead of jumping every set at once. The
       // OTHER sets hold at their already-earned reps (repCeiling), NOT a
@@ -866,6 +884,14 @@ function computeTarget(ex, history, meso) {
 // weight/reps are stored as "L:x/R:y" strings which isWorkingSet can't parse,
 // so the median/75% rule above can't apply to them without also teaching every
 // consumer to parse per-side values — out of scope for the progression fix.
+//
+// DELIBERATE SCOPE BOUNDARY, not an oversight: unilateral exercises get NONE
+// of computeTarget's newer machinery — no e1RM-inverted rep ranges/AMRAP, no
+// per-set autoregulation, and no ladder-set testing (even a unilateral
+// dumbbell exercise like Single-Arm DB Row always resets to repMin on a
+// weight bump here). Porting any of that would mean rebuilding this whole
+// per-side data model first, not a small addition — left for a dedicated
+// pass rather than folded in here.
 function computeTargetPerSet(ex, setIndex, history) {
   const programWeight = ex.weight || 0;
   let lastWeight = programWeight;
@@ -1051,7 +1077,7 @@ function formatSession(sess) {
 function sessionToRows(sess) {
   const rows = [];
   Object.entries(sess.exercises).forEach(([exercise, sets]) => {
-    sets.forEach(s => rows.push({ exercise, set: parseInt(s.set), weight: s.weight, reps: s.reps, rpe: s.rpe, completed: s.completed }));
+    sets.forEach(s => rows.push({ exercise, set: parseInt(s.set), weight: s.weight, reps: s.reps, rpe: s.rpe, completed: s.completed, notes: s.notes }));
   });
   return rows;
 }
@@ -1079,9 +1105,23 @@ function getSetHistory(history, exName, setIndex) {
   const result = [];
   for (const sess of history) {
     const setRows = sess.rows ? sess.rows.filter(r => r.exercise === exName && r.set === setIndex + 1) : [];
-    if (setRows.length > 0) {
-      result.push({ weight: setRows[0].weight, reps: setRows[0].reps, date: sess.date });
+    if (!setRows.length) continue;
+    // Set 1's history feeds the stagnant/declining classification below
+    // (analyseSetHistory). A ladder-tested set 1 is a deliberate probe at a
+    // different weight/rep scheme than "normal" — including it corrupts
+    // that classification (a missed probe can read as decline, a successful
+    // one as a spurious PR). Skip it here the same way computeTarget itself
+    // detects a ladder attempt: explicit tag first, weight pattern fallback.
+    if (setIndex === 0) {
+      const restRows = (sess.rows || []).filter(r => r.exercise === exName && r.set !== 1 && isWorkingSet(r.weight, r.reps));
+      if (restRows.length) {
+        const restMedian = median(restRows.map(r => parseFloat(r.weight)));
+        const w = parseFloat(setRows[0].weight);
+        const wasLadder = isLadderTagged(setRows[0].notes) || (!isNaN(w) && w > restMedian + 0.01);
+        if (wasLadder) continue;
+      }
     }
+    result.push({ weight: setRows[0].weight, reps: setRows[0].reps, date: sess.date });
   }
   return result; // newest first (history is sorted desc)
 }
@@ -2092,7 +2132,15 @@ async function saveSession() {
       } else {
         if (!st.weight&&!st.reps) return;
         hasData=true;
-        rows.push([cleanSessDate,dayLabel,ex.name,si+1,st.weight||"",st.reps||"",liveNote[i]||"",sessionKey,st.rpe||"",st.hit?"1":"0"]);
+        // Tag set 1's OWN row (not the others) when the app actually
+        // rendered it as a ladder-test offer this session — a real marker
+        // for future sessions to key off, instead of only ever inferring a
+        // ladder attempt from the weight pattern. See getSetHistory/
+        // computeTarget's ladder detection.
+        const noteText = (si === 0 && renderedTargets[i]?.[0]?.isLadder)
+          ? `${liveNote[i]||""} ${LADDER_TAG}`.trim()
+          : (liveNote[i]||"");
+        rows.push([cleanSessDate,dayLabel,ex.name,si+1,st.weight||"",st.reps||"",noteText,sessionKey,st.rpe||"",st.hit?"1":"0"]);
       }
     });
   });
@@ -3135,6 +3183,9 @@ async function init() {
   document.getElementById("save-btn").addEventListener("click",saveSession);
   document.getElementById("mf-save").addEventListener("click",submitMuscleFeedback);
   document.getElementById("mf-skip").addEventListener("click",()=>document.getElementById("muscle-feedback-box").classList.add("hidden"));
+  const ladderToggle=document.getElementById("ladder-toggle");
+  ladderToggle.checked=isLadderEnabled();
+  ladderToggle.addEventListener("change",e=>{ setLadderEnabled(e.target.checked); toast(e.target.checked?"Ladder-set testing on":"Ladder-set testing off"); });
   document.getElementById("bw-save").addEventListener("click",saveBw);
   document.getElementById("override-toggle").addEventListener("change",e=>{
     overrideMode = e.target.checked;

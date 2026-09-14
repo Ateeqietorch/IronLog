@@ -94,6 +94,13 @@ For most exercises, the "ceiling" that triggers a weight bump is just `repMax`. 
 - **Barbell/cable/machine** (anything not classified as dumbbell): bump by ~5% of current weight (ACSM's 2–10% progressive-overload guidance), rounded to the nearest 2.5lb, floored at 2.5lb.
 - **Dumbbells:** bump by a flat 5lb, then the *result* is snapped to the nearest 5lb multiple — not just the delta, since a starting weight that isn't itself a multiple of 5 (an odd manual entry) would otherwise still land on a nonexistent rack weight.
 
+### Dumbbell ladder-set testing
+The first time a dumbbell exercise hits its extended rep ceiling, instead of jumping every set to the next dumbbell size at once, the app offers a one-set TEST: set 1 goes to the next size at `repMin` reps (🪜 badge, fixed RPE 8.5 target — not on the ascending schedule) while the other sets hold at the already-proven weight/reps. Hit `repMin` on the test → next session promotes ALL sets to the new weight. Miss it → hold at the proven weight and offer the same test again, rather than escalating. Detected primarily by an explicit `[ladder-test]` tag the app writes into that set's own Notes field the moment it renders the offer (`saveSession`), falling back to the underlying weight-pattern heuristic (set 1 logged heavier than the rest) for any row saved before the tag existed.
+
+**Togglable** (Library tab, defaults on) via `isLadderEnabled()` — `computeTarget` checks it at both points a ladder offer could start (rep-ceiling detection and the "was last session's set 1 a ladder attempt" check), so turning it off makes dumbbell exercises behave exactly like the old flat weight-bump-and-reset-to-repMin path.
+
+**Explicitly out of scope:** unilateral exercises never get a ladder offer — `computeTargetPerSet` (the separate per-side legacy path) has no equivalent, by design; see its own doc comment. The `[ladder-test]` tag also keeps a ladder-tested set 1 OUT of that set's own stagnant/declining trend (`getSetHistory` excludes it — a probe at a different weight/rep scheme isn't a normal data point), and the `ai_review`/`ai_reconsider` backend prompts are told what the tag means so a missed test doesn't get cited as evidence for a hold or deload.
+
 ### Autoregulated back-off severity
 When a set is missed or a first-set struggle is detected, the weight cut scales 10–25% based on how badly it missed (fraction of target reps short) plus an extra bump if RPE hit true failure (≥9.5) — not a flat percentage. Mirrors real-world autoregulation practice (typically cited as a 10–25% range tied to severity).
 

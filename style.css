@@ -133,6 +133,10 @@ input::placeholder { color:var(--text4); }
 .set-target .target-rpe { color:var(--text3); font-size:8px; }
 .target-amrap { font-size:8px; color:var(--bg); background:var(--gold); padding:1px 4px; border-radius:2px; font-weight:600; letter-spacing:.04em; }
 .target-auto { font-size:9px; color:#8ab0e0; cursor:help; }
+
+.ladder-toggle-row { display:flex; align-items:center; flex-wrap:wrap; gap:6px 8px; background:var(--bg2); border:1px solid var(--border2); border-radius:4px; padding:9px 10px; margin-bottom:10px; font-size:11px; color:var(--text2); cursor:pointer; }
+.ladder-toggle-row input { flex-shrink:0; }
+.ladder-toggle-hint { flex-basis:100%; font-size:9px; color:var(--text3); line-height:1.4; }
 .btn-check { background:none; border:1px solid #2a3a2a; color:#2a3a2a; cursor:pointer; font-size:13px; padding:3px 7px; border-radius:2px; transition:all .2s; line-height:1; flex-shrink:0; }
 .btn-check.hit { background:#1a2a1a; border-color:var(--green); color:var(--green); }
 .side-label { font-size:8px; color:var(--text3); letter-spacing:.08em; flex-shrink:0; }

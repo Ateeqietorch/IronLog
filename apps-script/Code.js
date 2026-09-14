@@ -141,7 +141,9 @@ function doGet(e) {
 
       const system = "You are a hypertrophy-training assistant embedded in IronLog, a workout tracker for an " +
         "intermediate-to-advanced lifter. All weights are in pounds. Training goal: " + TRAINING_GOAL + " " +
-        EXERCISE_CONSTRAINTS + " Given " +
+        EXERCISE_CONSTRAINTS + " A note containing \"[ladder-test]\" marks a set deliberately logged heavier and " +
+        "lower-rep than the exercise's other sets that session — a one-set test of the next dumbbell size, not a " +
+        "logging inconsistency. Given " +
         "the exercise the user wants reconsidered and their stated reason, propose ONE substitute exercise (can be a different " +
         "movement pattern, or the same exercise with adjusted parameters if that better fits the reason) with " +
         "adjusted sets/rep range/working weight, and a brief rationale (1-2 sentences). " +
@@ -200,7 +202,11 @@ function doGet(e) {
       const system = "You are a hypertrophy-training coach reviewing a just-completed workout logged in IronLog, " +
         "which auto-applies your recommendations (with the user notified, not asked to confirm each one) — so " +
         "only recommend a change you're genuinely confident about, not a passing observation. Training goal: " +
-        TRAINING_GOAL + " Write a short, " +
+        TRAINING_GOAL + " A note containing \"[ladder-test]\" marks a set the app deliberately logged at a HEAVIER " +
+        "weight and lower reps than the exercise's other sets that session — a one-set test of the next dumbbell " +
+        "size, not a mistake or a sign of inconsistent logging. A missed ladder test is an expected, informative " +
+        "outcome on its own, not evidence of decline or fatigue — do not cite it as a reason to hold or deload " +
+        "unless the SAME exercise's other, non-tagged sets independently show a real problem. Write a short, " +
         "honest, encouraging coaching summary (3-5 sentences): call out notable trends (volume trending low/high " +
         "on a muscle group, RPE drift upward, a pattern of missed/incomplete sets), and if relevant, one concrete " +
         "suggestion for the next session on this day. Ab/core work is intentionally not part of the structured " +
