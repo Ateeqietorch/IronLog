@@ -126,6 +126,9 @@ Before rendering an exercise's targets, the app sums a "fatigue score" from all 
 ### First-set struggle detection
 Watches set 1 of the first exercise (and generally set 1 of any exercise) for either: reps landing >15% below target, or RPE hitting true failure (≥9.5). If triggered: shows an alert, suggests a reduced weight for the remaining sets (severity-scaled, anchored to whatever was actually lifted — never suggests going *above* a weight that was just failed), and auto-adds one extra set at that reduced weight for compound lifts (guarded so it only adds once per struggle, not on every keystroke). If it's the very first exercise of the session and it's a compound lift, also raises a session-wide "consider treating today as a recovery session" alert.
 
+### Per-set autoregulation (any set, not just set 1)
+The struggle detector above only ever reacts to set 1, and only to a severe miss. `autoregulateNextSet()` runs after *every* set's RPE is entered and compares it to what *this session's own* ascending schedule (§5) planned for that specific set — not history, not a severity threshold. If today's actual RPE comes in ≥1 point hotter than planned, the next not-yet-started set's live target weight is trimmed (up to 5%, scaled with how far over); ≥1.5 points colder (notably more reserve than the ramp assumed), it's nudged up slightly (up to 3%). A blue ● badge marks an adjusted target. Deliberately a nudge, not a re-plan: it never touches a set the lifter has already started, and an adjustment smaller than the equipment's own increment (2.5lb fine-adjustable, 5lb dumbbell) is simply skipped rather than forced. Cleared with the rest of live-session state (`sessionAutoAdjust`) whenever the day changes or the session saves.
+
 ---
 
 ## 6. "Up Next" — Day Suggestion & Adherence

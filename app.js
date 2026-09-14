@@ -945,6 +945,7 @@ let repoFilter  = "";
 let repoSearch  = "";
 let renderedTargets = {}; // { exIdx: { setIdx: {weight, reps} } } — set at render time
 let struggleSetAdded = {}; // { exIdx: true } — guards against re-adding a set on every keystroke of a struggling set 1
+let sessionAutoAdjust = {}; // { exIdx: { setIdx: pct } } — live within-session per-set weight nudges from actual RPE, cleared with every session reset alongside struggleSetAdded
 let overrideMode = false;      // "Override Today" — edits apply to overrideExercises only
 let overrideExercises = null;  // temp copy of the day's exercise list, used only while overrideMode is on
 let pendingLogDesc = null;     // { date, day, exercises } — parsed "log by description" result awaiting Load
@@ -1243,7 +1244,7 @@ function checkForLocalSession() {
   document.getElementById("draft-continue").onclick = () => {
     activeDay = local.day; sessDate = local.date;
     document.getElementById("session-date").value = local.date;
-    liveLog = local.liveLog || {}; liveNote = local.liveNote || {}; struggleSetAdded = {};
+    liveLog = local.liveLog || {}; liveNote = local.liveNote || {}; struggleSetAdded = {}; sessionAutoAdjust = {};
     renderDayButtons(); renderExercises(); renderLastSession();
     banner.classList.add("hidden"); toast("Local session restored");
   };
@@ -1302,7 +1303,7 @@ async function checkForDraft() {
 // positional array (index 0 = set 1); a hole at an index is skipped.
 function mergeSetsIntoLiveLog(entries) {
   const curArr = activeExArray();
-  liveLog = {}; liveNote = {}; struggleSetAdded = {};
+  liveLog = {}; liveNote = {}; struggleSetAdded = {}; sessionAutoAdjust = {};
   entries.forEach(entry => {
     let exIdx = curArr.findIndex(e => e.name === entry.name);
     if (exIdx === -1) {
@@ -1364,7 +1365,7 @@ async function recoverDraft() {
   if (local && hasLoggedData(local.liveLog)) {
     activeDay = local.day; sessDate = local.date;
     document.getElementById("session-date").value = local.date;
-    liveLog = local.liveLog || {}; liveNote = local.liveNote || {}; struggleSetAdded = {};
+    liveLog = local.liveLog || {}; liveNote = local.liveNote || {}; struggleSetAdded = {}; sessionAutoAdjust = {};
     renderDayButtons(); await renderExercises(); renderLastSession(); renderUpNextBanner();
     toast(`Recovered local session from ${local.date}`);
     return;
@@ -1463,6 +1464,17 @@ async function renderExercises() {
       if (si === 0 && !ex.unilateral && exTarget?.ladderOverride) {
         target = { ...exTarget.ladderOverride, isLadder: true };
       }
+      // True per-set autoregulation: autoregulateNextSet() (below) nudges an
+      // UPCOMING set's weight once an earlier set's actual RPE this session
+      // ran meaningfully hotter or colder than what was planned for it — the
+      // struggle detector only ever reacted to set 1; this reacts to any set.
+      // Applied here (before reps/e1RM are derived from weight) so everything
+      // downstream sees the adjusted number consistently.
+      const sessAdj = (!ex.unilateral && !target.isLadder) ? sessionAutoAdjust[i]?.[si] : null;
+      if (sessAdj) {
+        const adjWeight = roundToNearest((target.weight || 0) * (1 + sessAdj), getLoadIncrement(ex.name) >= 5 ? 5 : 2.5);
+        target = { ...target, weight: adjWeight, e1rm: calcE1RM(adjWeight, target.reps), autoregulated: true };
+      }
       if (highFatigue && !target.isLadder && target.reps < upperHalfReps) {
         target = { ...target, reps: upperHalfReps, e1rm: calcE1RM(target.weight, upperHalfReps) };
       }
@@ -1500,7 +1512,7 @@ async function renderExercises() {
       target = { ...target, targetRPE: thisRPE };
       const analysis = analyseSetHistory(setHist);
       setTargets.push(target);
-      renderedTargets[i][si] = { weight: target.weight, reps: target.reps, targetRPE: target.targetRPE, isLadder: !!target.isLadder, isAMRAP: !!target.isAMRAP, repFloor: target.repFloor, repLow: target.repLow, repHigh: target.repHigh };
+      renderedTargets[i][si] = { weight: target.weight, reps: target.reps, targetRPE: target.targetRPE, isLadder: !!target.isLadder, isAMRAP: !!target.isAMRAP, repFloor: target.repFloor, repLow: target.repLow, repHigh: target.repHigh, autoregulated: !!target.autoregulated };
       setStatuses.push(analysis);
     }
 
@@ -1556,9 +1568,10 @@ async function renderExercises() {
         const e1rmNow = curW && curR ? calcE1RM_RPE(parseFloat(curW), parseFloat(curR), curRpe) : 0;
         const repDisplay = target.isAMRAP ? `${target.repFloor}+` : (target.repLow != null ? `${target.repLow}–${target.repHigh}` : target.reps);
         const amrapTag = target.isAMRAP ? ' <span class="target-amrap" title="Last set — go to your target RPE, log whatever you actually get">AMRAP</span>' : "";
+        const autoTag = target.autoregulated ? ' <span class="target-auto" title="Adjusted from an earlier sets actual RPE this session">●</span>' : "";
         setsHTML += `<div class="set-row${target.isLadder ? " ladder" : ""}" style="margin-bottom:6px">
           <div class="set-num">S${si+1}${target.isLadder ? ' <span class="ladder-badge" title="Testing the next dumbbell size — the rest of your sets stay at the current weight">🪜</span>' : ""}</div>
-          <div class="set-target">→ <span class="target-val">${target.weight}lb × ${repDisplay}</span>${amrapTag} <span class="target-rpe">@RPE${target.targetRPE}</span></div>
+          <div class="set-target">→ <span class="target-val">${target.weight}lb × ${repDisplay}</span>${amrapTag}${autoTag} <span class="target-rpe">@RPE${target.targetRPE}</span></div>
           <input type="number" class="set-w" data-ex="${i}" data-set="${si}" placeholder="lb" value="${curW}" />
           <input type="number" class="set-r" data-ex="${i}" data-set="${si}" placeholder="reps" value="${curR}" />
           <input type="number" class="set-rpe" data-ex="${i}" data-set="${si}" placeholder="RPE" min="1" max="10" step="0.5" value="${curRpe}" title="Rate of Perceived Exertion 1–10" />
@@ -1634,6 +1647,46 @@ function addExerciseToActiveDay(){
     renderExercises();
     toast(chosen.name+" added");
   });
+}
+
+// True per-set autoregulation. checkFirstSetStruggle (below) only ever
+// reacts to SET 1's actual reps, with a severe-miss threshold — "if set 2 or
+// set 3 falls apart, nothing happens" (GAP-ANALYSIS.md §1.2). This runs
+// after ANY set's RPE is known and compares it to what THIS session's own
+// ascending schedule planned for that set — not last session's history —
+// nudging the next UNLOGGED set's live weight when today's effort is
+// running meaningfully hotter or colder than planned. Deliberately a nudge,
+// not a re-plan: thresholds are conservative and the next set is only ever
+// touched before the lifter has started it.
+function autoregulateNextSet(exIdx, setIdx) {
+  const ex = (activeExArray()||[])[exIdx];
+  if (!ex || ex.unilateral) return;
+  if (renderedTargets[exIdx]?.[setIdx]?.isLadder) return; // experimental ladder set — different rules entirely
+
+  const nextIdx = setIdx + 1;
+  if (nextIdx >= ex.sets) return; // no set left to adjust
+  const nextLogged = liveLog[exIdx]?.sets?.[nextIdx];
+  if (nextLogged?.weight || nextLogged?.reps || nextLogged?.hit) return; // already started under the lifter's hands — don't move it
+
+  const actualRpe = parseFloat(liveLog[exIdx]?.sets?.[setIdx]?.rpe);
+  const plannedRpe = renderedTargets[exIdx]?.[setIdx]?.targetRPE;
+  if (isNaN(actualRpe) || plannedRpe == null) return;
+  const nextTarget = renderedTargets[exIdx]?.[nextIdx];
+  if (!nextTarget) return;
+
+  const delta = actualRpe - plannedRpe;
+  let pct = 0;
+  if (delta >= 1)        pct = -Math.min(0.05, 0.02 * delta);  // ran hotter than planned -> trim the next set a little
+  else if (delta <= -1.5) pct =  Math.min(0.03, 0.015 * -delta); // notably more reserve than planned -> small bump
+  if (!pct) return;
+
+  const increment = getLoadIncrement(ex.name) >= 5 ? 5 : 2.5;
+  const adjustedWeight = roundToNearest((nextTarget.weight || 0) * (1 + pct), increment);
+  if (adjustedWeight === nextTarget.weight) return; // equipment can't express a change this small — leave it alone
+
+  if (!sessionAutoAdjust[exIdx]) sessionAutoAdjust[exIdx] = {};
+  sessionAutoAdjust[exIdx][nextIdx] = pct;
+  renderExercises();
 }
 
 function checkFirstSetStruggle(exIdx, setIdx) {
@@ -1771,6 +1824,7 @@ function bindExerciseInputs(container, curEx) {
       if (st?.weight && st?.reps && st?.rpe && curEx[i] && restTimerInterval) {
         startRestTimer(computeRestSeconds(restClassificationFor(i, si, curEx[i]), st.rpe));
       }
+      if (st?.weight && st?.reps && st?.rpe) autoregulateNextSet(i, si);
     });
   });
 
@@ -1978,7 +2032,7 @@ function renderLastSession() {
 
 // ── Day buttons ───────────────────────────────────────────────────────────────
 function selectDay(d) {
-  activeDay=d; liveLog={}; liveNote={}; struggleSetAdded={};
+  activeDay=d; liveLog={}; liveNote={}; struggleSetAdded={}; sessionAutoAdjust = {};
   stopRestTimer();
   overrideMode=false; overrideExercises=null;
   clearPersistedOverrideState();
@@ -2108,7 +2162,7 @@ async function saveSession() {
 
     sessions=parseSessionRows((await sheetsCall({action:"read"})).rows);
     setSyncStatus("synced");
-    liveLog={}; liveNote={}; struggleSetAdded={};
+    liveLog={}; liveNote={}; struggleSetAdded={}; sessionAutoAdjust = {};
     stopRestTimer();
     clearLocalSession(); // session is saved for real now — the local safety net is no longer needed
     renderUpNextBanner(); // last-trained dates just changed
@@ -2540,7 +2594,7 @@ document.getElementById("feeling-submit").addEventListener("click", async () => 
           };
         });
         persistExercises();
-        liveLog = {}; liveNote = {}; struggleSetAdded = {};
+        liveLog = {}; liveNote = {}; struggleSetAdded = {}; sessionAutoAdjust = {};
         clearLocalSession(); // plan just changed — any prior local snapshot is for the old plan
         document.getElementById("feeling-modal").classList.add("hidden");
         renderDayButtons(); renderExercises(); renderLastSession();
@@ -2735,7 +2789,7 @@ document.getElementById("redesign-approve").addEventListener("click", () => {
   }));
   lsSet("il:exercises", exercises); // always the PERMANENT program — never routed through override state
   document.getElementById("redesign-modal").classList.add("hidden");
-  if (activeDay === redesignDay) { liveLog = {}; liveNote = {}; struggleSetAdded = {}; clearLocalSession(); renderExercises(); }
+  if (activeDay === redesignDay) { liveLog = {}; liveNote = {}; struggleSetAdded = {}; sessionAutoAdjust = {}; clearLocalSession(); renderExercises(); }
   toast(`${getDayLabel(redesignDay)} redesigned`);
 });
 
