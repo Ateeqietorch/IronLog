@@ -1,0 +1,10 @@
+{
+  "name": "ironlog",
+  "private": true,
+  "type": "module",
+  "description": "IronLog hypertrophy coach PWA",
+  "scripts": {
+    "test": "node --test \"tests/**/*.test.js\""
+  },
+  "engines": { "node": ">=20" }
+}
