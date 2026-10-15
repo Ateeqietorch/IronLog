@@ -1,0 +1,85 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>IronLog v3 design reference</title>
+<link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/dist/tabler-icons.min.css">
+<style>
+:root{--iron:#121315;--plate:#1E2024;--plate-deep:#17181B;--seam:#2E3136;--scrim:#0B0C0D;--silver:#D9DCE1;--silver-2:#BFC3C9;--steel:#8F959D;--red:#E5383B;--red-fill:#CF2E32;--red-dim:#5A2224;--red-wash:#2A1416;--red-ink:#F07A7C;--done:#7FC48A;--warn:#E8A93A}
+*{box-sizing:border-box;margin:0}
+body{background:#2A2C30;font-family:Barlow,sans-serif;color:var(--silver);font-variant-numeric:tabular-nums;padding:24px;display:flex;flex-wrap:wrap;gap:24px;justify-content:center}
+.ph{width:375px;border-radius:36px;border:6px solid var(--seam);background:var(--iron);overflow:hidden}
+.bs{font-family:'Big Shoulders Display',sans-serif;font-weight:700;text-transform:uppercase}
+.num{font-family:'Big Shoulders Display',sans-serif;font-weight:700}
+.mut{color:var(--steel)}.row{display:flex;align-items:center}
+.chip{flex:1;height:40px;border-radius:8px;border:1px solid var(--seam);background:var(--plate);color:var(--silver);font:500 15px Barlow;display:flex;align-items:center;justify-content:center}
+.chip.on{background:var(--red-fill);border-color:var(--red-fill);color:#fff}
+.st{height:44px;border-radius:8px;padding:0 12px;font-size:15px;gap:10px;background:var(--plate-deep)}
+.btn{display:flex;align-items:center;justify-content:center;gap:8px;height:52px;border-radius:10px;background:var(--red-fill);color:#fff;font-size:22px}
+.pill{font-size:12px;padding:3px 8px;border-radius:6px;border:1px solid var(--red-dim);color:var(--red-ink);background:var(--red-wash)}
+.nav{display:flex;border-top:1px solid var(--seam);padding:8px 0 16px}.nav div{flex:1;text-align:center;font-size:12px;color:var(--steel)}.nav i{display:block;font-size:22px;margin-bottom:2px}
+.list{padding:12px 2px;border-bottom:1px solid var(--seam);gap:12px}
+td{padding:10px 0;border-bottom:1px solid var(--seam);font-size:14px}td+td{text-align:right;width:90px}
+</style></head><body>
+
+<div class="ph">
+ <div class="row" style="justify-content:space-between;padding:20px 18px 6px">
+  <div><div class="mut" style="font-size:13px">Week 3 of 5 · leave 2 in the tank</div><div class="bs" style="font-size:34px;line-height:1.05">Push</div></div>
+  <div class="row" style="gap:6px;color:var(--done);font-size:12px"><i class="ti ti-cloud-check" style="font-size:16px"></i>Saved</div>
+ </div>
+ <div class="row" style="gap:4px;padding:6px 18px 14px"><div style="flex:1;height:4px;border-radius:2px;background:var(--red)"></div><div style="flex:1;height:4px;border-radius:2px;background:var(--red-dim)"></div><div style="flex:1;height:4px;border-radius:2px;background:var(--seam)"></div><div style="flex:1;height:4px;border-radius:2px;background:var(--seam)"></div><div style="flex:1;height:4px;border-radius:2px;background:var(--seam)"></div></div>
+ <div style="margin:0 12px;background:var(--plate);border-radius:16px;padding:16px">
+  <div class="row" style="justify-content:space-between">
+   <div><div class="row" style="gap:8px"><span style="font-size:18px;font-weight:500">Incline Smith press</span><span class="pill">Trial 2 of 3</span></div><div class="mut" style="font-size:13px">Set 2 of 3 · replacing incline DB press</div></div>
+   <button aria-label="Switch exercise" class="row" style="justify-content:center;width:40px;height:40px;border-radius:20px;border:1px solid var(--seam);background:none;color:var(--silver)"><i class="ti ti-arrows-exchange" style="font-size:18px"></i></button>
+  </div>
+  <div class="row num" style="align-items:baseline;gap:10px;margin:14px 0 2px"><span style="font-size:84px;line-height:.85;color:var(--red)">125</span><span class="mut" style="font-size:34px">×</span><span style="font-size:84px;line-height:.85">10</span></div>
+  <div class="row mut" style="gap:46px;font-size:12px;margin-bottom:10px"><span style="width:110px">lb incl. bar</span><span>reps</span></div>
+  <div class="row" style="gap:8px;font-size:13px;color:var(--silver-2);background:var(--plate-deep);border-radius:8px;padding:9px 11px"><i class="ti ti-trending-up" style="font-size:16px;color:var(--done)"></i>Up 10 lb. Session 1 calibrated it: 115 × 10 had 4 left.</div>
+  <div style="margin-top:12px;display:grid;gap:6px">
+   <div class="row st"><i class="ti ti-circle-check" style="font-size:20px;color:var(--done)"></i><span>125 × 10</span><span class="mut" style="margin-left:auto;font-size:13px">2 left</span></div>
+   <div class="row st" style="background:none;border:1.5px solid var(--red)"><i class="ti ti-player-play" style="font-size:18px;color:var(--red)"></i><span>125 × 10</span><span style="margin-left:auto;font-size:13px;color:var(--red)">Now</span></div>
+   <div class="row st mut"><i class="ti ti-circle" style="font-size:20px"></i><span>125 × 9</span><span style="margin-left:auto;font-size:13px">more is fine</span></div>
+  </div>
+  <div class="mut" style="font-size:13px;margin:14px 0 8px">Reps left in the tank</div>
+  <div class="row" style="gap:6px"><div class="chip">0</div><div class="chip">1</div><div class="chip on">2</div><div class="chip">3</div><div class="chip">4+</div></div>
+  <div class="btn bs" style="margin-top:12px"><i class="ti ti-check" style="font-size:20px"></i>Done as planned</div>
+  <div class="mut" style="text-align:center;font-size:13px;margin-top:10px">Different numbers? Edit set</div>
+ </div>
+ <div style="padding:16px 18px 6px"><div class="mut" style="font-size:13px;margin-bottom:6px">Up next</div>
+  <div class="row" style="justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--seam);font-size:15px"><span>Machine chest press</span><span class="mut">2 × 10 · 140</span></div>
+  <div class="row" style="justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--seam);font-size:15px"><span>Cable lateral raise</span><span class="mut">3 × 15 · 15</span></div>
+  <div class="row" style="justify-content:space-between;padding:9px 0;font-size:15px"><span>Overhead triceps ext.</span><span class="mut">3 × 12 · 50</span></div></div>
+ <div class="row" style="margin:8px 12px 10px;height:44px;border-radius:10px;background:var(--plate);padding:0 14px;gap:10px"><i class="ti ti-hourglass" style="font-size:18px;color:var(--red)"></i><span class="num" style="font-size:26px">1:24</span><span class="mut" style="font-size:13px">rest</span><span class="mut" style="margin-left:auto;font-size:13px">+30s · Skip</span></div>
+ <div class="nav"><div style="color:var(--red)"><i class="ti ti-barbell"></i>Train</div><div><i class="ti ti-calendar"></i>History</div><div><i class="ti ti-chart-line"></i>Progress</div><div><i class="ti ti-message-circle"></i>Coach</div></div>
+</div>
+
+<div class="ph" style="background:var(--scrim)">
+ <div style="padding:20px 18px;opacity:.3"><div class="bs" style="font-size:34px">Push</div></div>
+ <div style="background:var(--plate);border-radius:22px 22px 0 0;padding:10px 16px 20px;margin-top:30px">
+  <div style="width:40px;height:4px;border-radius:2px;background:var(--seam);margin:0 auto 14px"></div>
+  <div style="font-size:18px;font-weight:500">Switch incline DB press</div>
+  <div class="mut" style="font-size:13px;margin:2px 0 12px">Your chest progress carries over either way</div>
+  <div class="row" style="background:var(--iron);border-radius:10px;padding:4px;gap:4px;margin-bottom:10px"><div class="chip" style="height:36px;font-size:14px;background:none;border:none">Today</div><div class="chip on" style="height:36px;font-size:14px">Trial</div><div class="chip" style="height:36px;font-size:14px;background:none;border:none">Permanent</div></div>
+  <div style="background:var(--iron);border-radius:10px;padding:12px 14px;margin-bottom:12px">
+   <div class="row" style="justify-content:space-between"><span style="font-size:15px">Try it for</span><div class="row" style="gap:12px"><i class="ti ti-minus mut" style="font-size:18px"></i><span class="num" style="font-size:24px">3</span><i class="ti ti-plus mut" style="font-size:18px"></i><span class="mut" style="font-size:14px">push sessions</span></div></div>
+   <div class="mut" style="font-size:13px;margin-top:6px;line-height:1.5">Incline DB press stays in your program. After 3 sessions you'll get a side-by-side and choose.</div></div>
+  <div class="row" style="gap:10px;height:46px;border-radius:10px;background:var(--iron);border:1px solid var(--seam);padding:0 14px;margin-bottom:8px"><i class="ti ti-search mut" style="font-size:18px"></i><span class="mut" style="font-size:15px">Search any exercise</span></div>
+  <div class="row list"><div style="flex:1"><div style="font-size:15px">Incline machine press</div><div class="mut" style="font-size:13px">From your history · 150 × 10</div></div><i class="ti ti-chevron-right mut"></i></div>
+  <div class="row list"><div style="flex:1"><div style="font-size:15px">Incline Smith press</div><div class="mut" style="font-size:13px">Estimated 115 × 10 · first set checks it</div></div><i class="ti ti-chevron-right mut"></i></div>
+  <div class="row" style="padding:14px 2px 4px;gap:10px;color:var(--red);font-size:15px"><i class="ti ti-world-search" style="font-size:18px"></i>Not listed? Look it up</div>
+ </div>
+</div>
+
+<div class="ph"><div style="padding:22px 16px 18px">
+ <div class="mut" style="font-size:13px">Trial finished · 3 push sessions</div>
+ <div class="bs" style="font-size:30px;line-height:1.1;margin-bottom:14px">Keep incline Smith press?</div>
+ <div style="background:var(--plate);border-radius:12px;padding:2px 12px"><table style="width:100%;border-collapse:collapse">
+  <tr><td class="mut" style="font-size:12px"></td><td class="mut" style="font-size:12px">DB press</td><td style="font-size:12px">Smith trial</td></tr>
+  <tr><td>Strength trend</td><td class="mut">+0.8%/wk</td><td style="color:var(--done)">+2.1%/wk</td></tr>
+  <tr><td>Pump</td><td class="mut">Good</td><td style="color:var(--done)">Great</td></tr>
+  <tr><td>Joint comfort</td><td class="mut">Fine</td><td>Fine</td></tr>
+  <tr><td style="border:0">Prediction accuracy</td><td class="mut" style="border:0">±0.9 reps</td><td style="border:0">±1.4 reps</td></tr></table></div>
+ <div class="mut" style="font-size:13px;line-height:1.5;margin:12px 2px 14px">Early gains on a new exercise are partly learning the movement, so the strength trend counts less than pump and comfort.</div>
+ <div class="btn bs">Keep Smith press</div>
+ <div class="row" style="gap:8px;margin-top:8px"><div class="chip" style="height:44px">Switch back</div><div class="chip" style="height:44px">Extend trial</div></div>
+</div></div>
+</body></html>
