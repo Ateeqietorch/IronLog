@@ -23,7 +23,7 @@ Visual reference: open `design-reference.html` in a browser. Where this doc and 
   --seam:       #2E3136;  /* hairlines, borders, empty progress */
   --scrim:      #0B0C0D;  /* behind sheets */
   /* text */
-  --silver:     #D9DCE1;  /* primary text */
+  --silver:     #DFE2E6;  /* primary text */
   --silver-2:   #BFC3C9;  /* reason lines */
   --steel:      #8F959D;  /* secondary text, inactive icons */
   /* accent */

@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="theme-color" content="#0a0a0a" />
+  <title>IronLog classic</title>
+  <link rel="manifest" href="manifest.json" />
+  <link rel="icon" href="icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Bebas+Neue&display=swap" rel="stylesheet" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <div id="loading" class="loading-screen">
+    <div class="loading-logo">IRONLOG</div>
+    <div class="loading-sub">CONNECTING...</div>
+  </div>
+
+  <div id="app" class="app hidden">
+
+    <div id="rest-timer" class="rest-timer hidden">
+      <span id="rest-timer-label" class="rest-timer-label">Rest</span>
+      <span id="rest-timer-value" class="rest-timer-value">1:30</span>
+      <button id="rest-timer-add15" class="rest-timer-btn">+15s</button>
+      <button id="rest-timer-skip" class="rest-timer-btn">Skip</button>
+    </div>
+
+    <header class="header">
+      <div class="header-left">
+        <div class="logo">IRONLOG</div>
+        <div class="tagline">Hypertrophy Tracker</div>
+      </div>
+      <div id="sync-status" class="sync-status synced">● SYNCED</div>
+    </header>
+
+    <nav class="tabs">
+      <button class="tab active" data-tab="log">Session</button>
+      <button class="tab" data-tab="calendar">Calendar</button>
+      <button class="tab" data-tab="progress">Progress</button>
+      <button class="tab" data-tab="volume">Volume</button>
+      <button class="tab" data-tab="bodyweight">Weight</button>
+      <button class="tab" data-tab="library">Library</button>
+    </nav>
+
+    <!-- SESSION TAB -->
+    <div id="tab-log" class="tab-content active">
+      <div id="draft-banner" class="draft-banner hidden">
+        <div id="draft-banner-text" class="draft-banner-text"></div>
+        <div class="draft-banner-actions">
+          <button id="draft-continue" class="btn-sm-gold">Continue</button>
+          <button id="draft-discard" class="btn-sm-ghost">Discard</button>
+        </div>
+      </div>
+      <div id="up-next-banner" class="up-next-banner hidden">
+        <div id="up-next-text" class="up-next-text"></div>
+        <button id="up-next-switch" class="btn-sm-gold hidden">Switch</button>
+      </div>
+      <div id="meso-banner" class="meso-banner hidden"></div>
+      <div id="workout-alert" class="workout-alert hidden"></div>
+
+      <div class="section">
+        <div class="label">SESSION DATE</div>
+        <input type="date" id="session-date" class="date-input" />
+        <div class="label mt">TRAINING DAY</div>
+        <div id="day-buttons" class="day-buttons"></div>
+        <div id="override-row" class="override-row hidden">
+          <label class="override-toggle">
+            <input type="checkbox" id="override-toggle" />
+            <span>Override Today</span>
+          </label>
+          <div id="override-hint" class="override-hint hidden">Changes apply to today's session only — the permanent program is untouched.</div>
+        </div>
+        <button id="feeling-check-btn" class="btn-feeling-check">💬 How are you feeling today?</button>
+        <button id="recover-draft-btn" class="btn-feeling-check">🔍 Check for a saved draft</button>
+        <button id="logdesc-open-btn" class="btn-feeling-check">📝 Log a past session by description</button>
+        <button id="redesign-open-btn" class="btn-feeling-check">🛠 Redesign this day</button>
+        <div id="last-session-box" class="last-session hidden">
+          <div id="last-session-title" class="last-session-title"></div>
+          <pre id="last-session-body" class="last-session-body"></pre>
+        </div>
+        <div id="no-last-session" class="no-last-session hidden"></div>
+      </div>
+
+      <div class="divider-label" id="active-day-label"></div>
+      <div id="exercises-list"></div>
+      <div class="save-row">
+        <button id="save-btn" class="btn-primary">Save Session →</button>
+      </div>
+      <div id="muscle-feedback-box" class="muscle-feedback hidden">
+        <div class="session-review-title">HOW DID THIS FEEL?</div>
+        <div class="mf-hint">2 taps per muscle trained today — this is what drives next week's set counts instead of a fixed calendar.</div>
+        <div id="muscle-feedback-body"></div>
+        <div class="mf-actions">
+          <button id="mf-save" class="btn-sm-gold">Save Feedback</button>
+          <button id="mf-skip" class="btn-sm-ghost">Skip</button>
+        </div>
+      </div>
+      <div id="session-review-box" class="session-review hidden">
+        <div class="session-review-title">AI SESSION REVIEW</div>
+        <div id="session-review-body" class="session-review-body"></div>
+        <div id="session-review-applied" class="session-review-applied hidden"></div>
+      </div>
+    </div>
+
+    <!-- CALENDAR TAB -->
+    <div id="tab-calendar" class="tab-content hidden">
+      <div class="cal-nav">
+        <button class="btn-ghost cal-nav-btn" id="cal-prev">‹</button>
+        <div id="cal-month-label" class="cal-month"></div>
+        <button class="btn-ghost cal-nav-btn" id="cal-next">›</button>
+      </div>
+      <div class="cal-dow">
+        <div>Su</div><div>Mo</div><div>Tu</div><div>We</div><div>Th</div><div>Fr</div><div>Sa</div>
+      </div>
+      <div id="cal-grid" class="cal-grid"></div>
+      <div id="cal-detail" class="cal-detail hidden"></div>
+    </div>
+
+    <!-- PROGRESS TAB -->
+    <div id="tab-progress" class="tab-content hidden">
+      <div class="section-title">e1RM Progression</div>
+      <div id="e1rm-chart-wrap" class="chart-wrap"><canvas id="e1rm-chart"></canvas></div>
+      <div class="label mt" style="margin-bottom:8px">SELECT EXERCISE</div>
+      <div id="e1rm-exercise-picker" class="e1rm-picker"></div>
+      <div class="section-title mt">Weight Progression History</div>
+      <div id="prog-history"></div>
+      <div class="section-title mt">Current Suggested Weights</div>
+      <div id="current-weights"></div>
+    </div>
+
+    <!-- VOLUME TAB -->
+    <div id="tab-volume" class="tab-content hidden">
+      <div class="vol-week-nav">
+        <button class="btn-ghost" id="vol-prev">‹</button>
+        <div id="vol-week-label" class="vol-week-label"></div>
+        <button class="btn-ghost" id="vol-next">›</button>
+      </div>
+      <div class="section-title">Weekly Hard Sets by Muscle</div>
+      <div id="volume-bars"></div>
+      <div class="vol-legend">
+        <span class="vol-leg-item"><span class="vol-dot under"></span>Under MEV</span>
+        <span class="vol-leg-item"><span class="vol-dot ok"></span>Growth zone</span>
+        <span class="vol-leg-item"><span class="vol-dot over"></span>Over MRV</span>
+      </div>
+      <div class="vol-hint">Only sets at RPE 7+ count as hard sets. Tap a muscle name to set its own MEV/MRV.</div>
+      <div class="section-title mt">Effort Distribution</div>
+      <div id="rpe-distribution"></div>
+      <div class="section-title mt">Session Volume Load</div>
+      <div class="chart-wrap"><canvas id="vol-chart"></canvas></div>
+    </div>
+
+    <!-- BODYWEIGHT TAB -->
+    <div id="tab-bodyweight" class="tab-content hidden">
+      <div class="bw-log-row">
+        <div>
+          <div class="label">DATE</div>
+          <input type="date" id="bw-date" class="date-input" />
+        </div>
+        <div>
+          <div class="label">WEIGHT (lb)</div>
+          <input type="number" id="bw-weight" class="bw-input" placeholder="e.g. 185" step="0.1" />
+        </div>
+        <button id="bw-save" class="btn-primary bw-save-btn">Log</button>
+      </div>
+      <div class="bw-chart-wrap"><canvas id="bw-chart"></canvas></div>
+      <div id="bw-history" class="bw-history"></div>
+    </div>
+
+    <!-- LIBRARY TAB -->
+    <div id="tab-library" class="tab-content hidden">
+      <div class="label" style="margin-bottom:8px">EXERCISE LIBRARY</div>
+      <label class="ladder-toggle-row">
+        <input type="checkbox" id="ladder-toggle" />
+        <span>Dumbbell ladder-set testing</span>
+        <span class="ladder-toggle-hint">When a dumbbell exercise hits its rep ceiling, test one set at the next size before jumping everything.</span>
+      </label>
+      <div class="backup-row">
+        <span class="backup-hint">Your program (days/exercises) lives in this browser only. It's auto-backed-up to your Sheet in the background.</span>
+        <button id="restore-backup-btn" class="btn-sm-ghost">Restore from cloud backup</button>
+      </div>
+      <div class="backup-row">
+        <span class="backup-hint">Device key. Your sheet only accepts this key. To connect another phone or browser, copy it here and paste it there when asked.</span>
+        <button id="copy-key-btn" class="btn-sm-ghost">Copy device key</button>
+        <button id="enter-key-btn" class="btn-sm-ghost">Enter a key</button>
+      </div>
+      <input type="text" id="lib-search" class="repo-search" placeholder="Search exercises..." style="width:100%;margin-bottom:8px" />
+      <div id="lib-filters" class="repo-filters"></div>
+      <div id="lib-list" class="repo-list" style="max-height:none"></div>
+    </div>
+
+  </div>
+
+  <!-- EXERCISE REPOSITORY MODAL -->
+  <div id="repo-modal" class="modal-overlay hidden">
+    <div class="modal modal-tall">
+      <div class="modal-header">
+        <div class="modal-title">EXERCISE LIBRARY</div>
+        <button id="repo-close" class="btn-icon-close">✕</button>
+      </div>
+      <input type="text" id="repo-search" class="repo-search" placeholder="Search exercises..." />
+      <div id="repo-filters" class="repo-filters"></div>
+      <div id="repo-list" class="repo-list"></div>
+    </div>
+  </div>
+
+  <!-- SWAP MODAL -->
+  <div id="swap-modal" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-title">SWAP EXERCISE</div>
+      <div id="swap-replacing" class="modal-sub"></div>
+      <div class="modal-buttons">
+        <button id="swap-from-library" class="btn-primary" style="flex:1">Choose from Library</button>
+        <button id="swap-manual" class="btn-ghost">Enter Manually</button>
+      </div>
+      <div id="swap-manual-form" class="hidden" style="margin-top:14px">
+        <div class="field-label">EXERCISE NAME</div>
+        <input type="text" id="swap-name" placeholder="e.g. Cable Fly" style="margin-bottom:10px;width:100%" />
+        <div class="field-label">STARTING WEIGHT (lb)</div>
+        <input type="number" id="swap-weight" placeholder="Leave blank to keep current" style="width:100%" />
+        <div class="modal-note">Sets, reps, rep range carry over.</div>
+        <div class="modal-buttons" style="margin-top:14px">
+          <button id="swap-confirm" class="btn-primary" style="flex:1">Confirm</button>
+          <button id="swap-cancel" class="btn-ghost">Cancel</button>
+        </div>
+      </div>
+      <div style="margin-top:10px">
+        <button id="swap-cancel-main" class="btn-ghost" style="width:100%">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- RECONSIDER MODAL -->
+  <div id="reconsider-modal" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-title">RECONSIDER EXERCISE</div>
+      <div id="reconsider-exname" class="modal-sub"></div>
+      <div id="reconsider-form">
+        <div class="field-label">WHY RECONSIDER?</div>
+        <textarea id="reconsider-reason" class="reconsider-textarea" rows="3" placeholder="e.g. shoulder feels cranky today, gym doesn't have this machine, bored of it..."></textarea>
+        <div class="modal-buttons" style="margin-top:14px">
+          <button id="reconsider-submit" class="btn-primary" style="flex:1">Ask AI</button>
+          <button id="reconsider-cancel" class="btn-ghost">Cancel</button>
+        </div>
+      </div>
+      <div id="reconsider-loading" class="hidden reconsider-loading">Thinking...</div>
+      <div id="reconsider-result" class="hidden">
+        <div class="field-label">SUGGESTION</div>
+        <div id="reconsider-suggestion-name" class="reconsider-suggestion-name"></div>
+        <div id="reconsider-suggestion-meta" class="reconsider-suggestion-meta"></div>
+        <div id="reconsider-suggestion-rationale" class="reconsider-suggestion-rationale"></div>
+        <div class="modal-buttons">
+          <button id="reconsider-accept" class="btn-primary" style="flex:1">Accept</button>
+          <button id="reconsider-dismiss" class="btn-ghost">Dismiss</button>
+        </div>
+      </div>
+      <div id="reconsider-error" class="hidden reconsider-error"></div>
+    </div>
+  </div>
+
+  <!-- FEELING CHECK MODAL (pre-session sanity check) -->
+  <div id="feeling-modal" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-title">HOW ARE YOU FEELING?</div>
+      <div class="modal-sub">Today's auto-generated session can be adjusted before you start, if it's warranted.</div>
+      <div id="feeling-form">
+        <textarea id="feeling-note" class="reconsider-textarea" rows="3" placeholder="e.g. slept badly, low energy, shoulder's been cranky all week, feeling great actually..."></textarea>
+        <div class="modal-buttons" style="margin-top:14px">
+          <button id="feeling-submit" class="btn-primary" style="flex:1">Ask AI</button>
+          <button id="feeling-cancel" class="btn-ghost">Cancel</button>
+        </div>
+      </div>
+      <div id="feeling-loading" class="hidden reconsider-loading">Reviewing today's session...</div>
+      <div id="feeling-result" class="hidden">
+        <div id="feeling-note-text" class="reconsider-suggestion-rationale"></div>
+        <div id="feeling-changes" class="feeling-changes"></div>
+        <div class="modal-buttons">
+          <button id="feeling-accept" class="btn-primary hidden" style="flex:1">Apply for Today</button>
+          <button id="feeling-dismiss" class="btn-ghost" style="flex:1">Close</button>
+        </div>
+      </div>
+      <div id="feeling-error" class="hidden reconsider-error"></div>
+    </div>
+  </div>
+
+  <!-- LOG BY DESCRIPTION MODAL -->
+  <div id="logdesc-modal" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-title">LOG A PAST SESSION</div>
+      <div class="modal-sub">Describe what you actually did — any date, any day, in your own words.</div>
+      <div id="logdesc-form">
+        <div class="field-label">DATE</div>
+        <input type="date" id="logdesc-date" style="width:100%;margin-bottom:10px" />
+        <div class="field-label">TRAINING DAY</div>
+        <select id="logdesc-day" class="logdesc-select"></select>
+        <div class="field-label mt">WHAT DID YOU DO?</div>
+        <textarea id="logdesc-text" class="reconsider-textarea" rows="6" placeholder="e.g. Hack squat 140x10,10,9,3. RDL 135x10 for 4 sets. Leg curl 100x10,9,8..."></textarea>
+        <div class="modal-buttons" style="margin-top:14px">
+          <button id="logdesc-submit" class="btn-primary" style="flex:1">Parse</button>
+          <button id="logdesc-cancel" class="btn-ghost">Cancel</button>
+        </div>
+      </div>
+      <div id="logdesc-loading" class="hidden reconsider-loading">Parsing your description...</div>
+      <div id="logdesc-result" class="hidden">
+        <div class="field-label">PARSED</div>
+        <div id="logdesc-preview" class="feeling-changes"></div>
+        <div id="logdesc-clarifications" class="hidden reconsider-error"></div>
+        <div class="modal-buttons">
+          <button id="logdesc-load" class="btn-primary" style="flex:1">Load into Session</button>
+          <button id="logdesc-dismiss" class="btn-ghost">Discard</button>
+        </div>
+      </div>
+      <div id="logdesc-error" class="hidden reconsider-error"></div>
+    </div>
+  </div>
+
+  <!-- REDESIGN DAY MODAL (AI, conversational — proposal only, nothing applies until Approve) -->
+  <div id="redesign-modal" class="modal-overlay hidden">
+    <div class="modal modal-tall">
+      <div class="modal-header">
+        <div class="modal-title">REDESIGN THIS DAY</div>
+        <button id="redesign-close" class="btn-icon-close">✕</button>
+      </div>
+      <div class="modal-sub">Talk it through, then approve or reject — nothing changes until you say so.</div>
+      <div id="redesign-chat" class="redesign-chat"></div>
+      <div id="redesign-proposal" class="redesign-proposal"></div>
+      <div id="redesign-loading" class="hidden reconsider-loading">Thinking...</div>
+      <div id="redesign-error" class="hidden reconsider-error"></div>
+      <div class="redesign-input-row">
+        <input type="text" id="redesign-input" placeholder="Ask a question or give direction..." />
+        <button id="redesign-send" class="btn-sm-gold">Send</button>
+      </div>
+      <div class="modal-buttons" style="margin-top:10px">
+        <button id="redesign-approve" class="btn-primary hidden" style="flex:1">✅ Approve — apply this</button>
+        <button id="redesign-reject" class="btn-ghost">❌ Reject</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+  <script src="app.js"></script>
+</body>
+</html>

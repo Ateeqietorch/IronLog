@@ -28,3 +28,17 @@ export const tables = {
   upsert: (table, records, opts) => post("table_upsert", { table, records }, opts),
   remove: (table, keys, opts) => post("table_delete", { table, keys }, opts),
 };
+
+// v2-era GET actions (read, write, clear, read_bodyweight, load_program).
+export async function get(action, params = {}, { fetchImpl = fetch, key = deviceKey() } = {}) {
+  const url = new URL(SCRIPT_URL);
+  url.searchParams.set("action", action);
+  for (const [k, v] of Object.entries(params)) url.searchParams.set(k, typeof v === "string" ? v : JSON.stringify(v));
+  if (key) url.searchParams.set("token", key);
+  url.searchParams.set("t", String(Date.now()));
+  const r = await fetchImpl(url.toString());
+  const d = await r.json();
+  if (!d.ok && d.msg === "unauthorized") throw new Unauthorized("This device's key isn't accepted by your sheet.");
+  if (!d.ok) throw new Error(d.msg || "Backend error");
+  return d;
+}

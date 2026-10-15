@@ -181,7 +181,7 @@ export function reasonText(r, exercise) {
 // session copy of the model (each set moves it at most halfway), then redo
 // the sets that haven't started. The load only changes if the current one
 // would push reps outside the range; sets in `locked` are never touched.
-export function recalcRemaining({ plan, model, models, exercise, loggedSets, locked = [], date, repRange = exercise.defaultRepRange, bodyweight = null, gymProfile = null, ladder, lastLoad = null }) {
+export function recalcRemaining({ plan, model, models, exercise, loggedSets, locked = [], date, repRange = exercise.defaultRepRange, bodyweight = null, gymProfile = null, ladder, lastLoad = null, gainCap = 0.5 }) {
   if (!plan?.sets?.length) return plan;
   const sideKey = plan.reason?.side;
   const baseModel = models ? models[sideKey ?? "L"] : model;
@@ -192,7 +192,7 @@ export function recalcRemaining({ plan, model, models, exercise, loggedSets, loc
   m = { ...m, logVar: m.logVar + READINESS_SD ** 2 };
   for (const s of loggedSets) {
     const eff = toEffective(exercise, Number(s.load), bodyweight);
-    m = updateModel(m, { load: eff, reps: s.reps, rir: s.rir, setIndex: s.index ?? s.setIndex, date }, { gainCap: 0.5, record: false });
+    m = updateModel(m, { load: eff, reps: s.reps, rir: s.rir, setIndex: s.index ?? s.setIndex, date }, { gainCap, record: false });
   }
   const done = new Set(loggedSets.map((s) => s.index ?? s.setIndex));
   const lock = new Set(locked);

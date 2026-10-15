@@ -128,6 +128,8 @@ export const CURATED = [
     { "upper-back": 1, lats: 0.5, biceps: 0.5, "rear-delts": 0.5 }, { k: UC, reps: [8, 12], lb: 0.5, aliases: ["Chest supported DB row", "Incline dumbbell row", "Seal row"] }),
   ex("machine-row", "Machine row", "horizontal-row", "machine-stack", "stack",
     { "upper-back": 1, lats: 0.5, biceps: 0.5, "rear-delts": 0.5 }, { k: UC, reps: [8, 12], lb: 0.5, aliases: ["Mid-back row machine", "Mid back row machine", "Seated row machine", "Chest supported machine row"] }),
+  ex("barbell-pendlay-row", "Barbell Pendlay row", "horizontal-row", "barbell", "plates",
+    { "upper-back": 1, lats: 1, biceps: 0.5, "rear-delts": 0.5, "lower-back": 0.5 }, { k: UC, reps: [6, 10], lb: 0.5, aliases: ["Pendlay row"], note: "Unsupported bent-over row; loads the lower back." }),
   ex("single-arm-cable-row", "Single-arm cable row", "horizontal-row", "cable", "stack",
     { lats: 1, "upper-back": 0.5, biceps: 0.5 }, { k: UC, reps: [10, 15], lb: 0.7, unilateral: true, aliases: ["Single arm cable row", "One arm cable row"] }),
   ex("single-arm-db-row", "Single-arm dumbbell row", "horizontal-row", "dumbbell", "dumbbell-single",

@@ -1,6 +1,17 @@
 # Decisions log
 Choices made where the specs were ambiguous. Newest first.
 
+## Phase 3 — 2026-10-15
+- **v3 is the main page; classic v2 lives at `v2.html`.** Settings and the Coach tab link to it. Both read the same sheet and the same program, so you can go back and forth.
+- **Your program carries over.** v3 reads the program v2 kept in this browser (all your days, sets, rep ranges). On a fresh device it falls back to the PPL+UL template. Phase 6 moves the program into the sheet.
+- **Exercises with no history start from your old program weight** as a calibration set (one extra rep in reserve), and the rest of the sets recompute from what you do. Exercises with neither go manual for set 1, then get coached.
+- **Week-1 RIR schedule now; volume model in Phase 6.** A training block starts the first time you log a set in v3 (3 → 2 → 2 → 1 → 1 reps in reserve, then a deload week). Set counts come from your program until Phase 6.
+- **Saving:** every set is kept on the phone as you go; *Finish* writes the session to the sheet in the same format v2 used (columns A–J unchanged) plus planned-vs-actual columns K–P. If the sheet can't be reached, it's kept as pending and retried when the app opens or comes back online.
+- **"4+" chip** stands for any plan of 4 or more reps in reserve (deload, first session back) and keeps the planned number.
+- **Switch button is hidden until Phase 4** rather than shown as a dead control.
+- **Silver brightened to #DFE2E6** so primary text clears 12:1 on cards (contrast is a test now).
+- **Fonts and icons load from Google Fonts / jsDelivr** and are cached by the browser; with no connection on a fresh install the app falls back to system fonts.
+
 ## Phase 2 — 2026-10-15
 - **Models are rebuilt from your log, not stored separately.** The workout log is the source of truth; replaying ~800 sets takes milliseconds, so every model is derived on load. Nothing can drift out of sync. (The ExerciseModels tab stays available for later caching.)
 - **Expected progress.** Before each session the estimate is nudged up ~1% per week (none after 10+ days off or in a deload), then corrected by what you actually do. Without it, doing exactly what was prescribed would never move the numbers. Spec scenario 1 is tested as "four on-plan weeks move the prescription forward" rather than "one session adds a rep", because a 1% gain is often less than one rep.

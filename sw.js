@@ -1,22 +1,33 @@
-const CACHE_NAME = "ironlog-shell-v4";
+const CACHE_NAME = "ironlog-shell-v5";
 const SHELL_FILES = [
   "./",
   "./index.html",
+  "./v2.html",
   "./app.js",
-  "./ui/main.js",
+  "./style.css",
+  "./manifest.json",
+  "./icons/icon-192.png",
+  "./icons/icon-512.png",
+  "./styles/app.css",
+  "./ui/app.js",
+  "./ui/store.js",
+  "./ui/session.js",
+  "./ui/train.js",
+  "./ui/tabs.js",
+  "./ui/dom.js",
+  "./ui/rest.js",
   "./engine/index.js",
   "./engine/catalog.js",
   "./engine/model.js",
   "./engine/prescribe.js",
   "./engine/replay.js",
+  "./engine/meso.js",
   "./engine/seed/curated.js",
   "./data/config.js",
   "./data/sheets.js",
-  "./data/catalog-store.js",
-  "./style.css",
-  "./manifest.json",
-  "./icons/icon-192.png",
-  "./icons/icon-512.png"
+  "./data/log.js",
+  "./data/program.js",
+  "./data/catalog-store.js"
 ];
 
 self.addEventListener("install", (event) => {
