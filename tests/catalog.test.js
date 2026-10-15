@@ -63,14 +63,27 @@ test("resolve: close typo is a strong suggestion, still not a silent match", () 
 test("mapHistoryNames sends ambiguous names to review, honors decisions", () => {
   const names = [
     { name: "Hack Squat", count: 23 },
-    { name: "Weighted Pull-Up / Lat Pulldown", count: 19 },
-    { name: "Machine Incline Press", count: 12 },
+    { name: "Incline Press", count: 19 },
+    { name: "Curl Machine Thing", count: 4 },
   ];
   const a = mapHistoryNames(names, index);
   assert.deepEqual(a.mapped.map((m) => m.id), ["hack-squat"]);
-  assert.deepEqual(a.review.map((r) => r.name), ["Weighted Pull-Up / Lat Pulldown", "Machine Incline Press"]);
-  const b = mapHistoryNames(names, index, { "Machine Incline Press": "plate-loaded-incline-press" });
-  assert.equal(b.mapped.find((m) => m.name === "Machine Incline Press").id, "plate-loaded-incline-press");
+  assert.deepEqual(a.review.map((r) => r.name), ["Incline Press", "Curl Machine Thing"]);
+  const b = mapHistoryNames(names, index, { "Incline Press": "plate-loaded-incline-press" });
+  assert.equal(b.mapped.find((m) => m.name === "Incline Press").id, "plate-loaded-incline-press");
+});
+
+test("Ateeq's review answers resolve to the right exercises", () => {
+  const want = {
+    "Overhead Tricep Extension": "overhead-cable-triceps-extension",
+    "Weighted Pull-Up / Lat Pulldown": "lat-pulldown",
+    "Downstairs Chest Press Fly": "pec-deck",
+    "Stiff-Leg Deadlift (DB) Against Pad": "thigh-supported-db-sldl",
+    "Rope Cable Tricep Extension": "triceps-rope-pushdown",
+    "Machine Incline Press": "plate-loaded-incline-press",
+    "Leg Curl": "lying-leg-curl",
+  };
+  for (const [name, id] of Object.entries(want)) assert.equal(resolveExercise(name, index).match?.id, id, name);
 });
 
 test("validateExercise rejects bad records", () => {

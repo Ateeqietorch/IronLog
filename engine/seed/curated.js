@@ -47,7 +47,7 @@ export const CURATED = [
   ex("machine-incline-press", "Pin-loaded incline chest press", "incline-press", "machine-stack", "stack",
     { chest: 1, "front-delts": 0.5, triceps: 0.5 }, { k: UC, reps: [8, 12], aliases: ["Selectorized incline press"] }),
   ex("plate-loaded-incline-press", "Plate-loaded incline press", "incline-press", "machine-plate", "plates",
-    { chest: 1, "front-delts": 0.5, triceps: 0.5 }, { k: UC, reps: [8, 12], note: "Load is logged per side.", aliases: ["Machine incline press (plate-loaded, per-side)"] }),
+    { chest: 1, "front-delts": 0.5, triceps: 0.5 }, { k: UC, reps: [8, 12], note: "Load is logged per side.", aliases: ["Machine incline press (plate-loaded, per-side)", "Machine incline press"] }),
   ex("push-up", "Push-up", "horizontal-press", "bodyweight", "bodyweight-plus",
     { chest: 1, triceps: 0.5, "front-delts": 0.5 }, { k: UC, reps: [10, 25], bwFraction: 0.65, aliases: ["Pushup"] }),
   ex("dip", "Dip", "horizontal-press", "bodyweight", "bodyweight-plus",
@@ -55,7 +55,7 @@ export const CURATED = [
 
   // ── Chest: flies ────────────────────────────────────────────────────────
   ex("pec-deck", "Pec deck", "fly", "machine-stack", "stack",
-    { chest: 1 }, { reps: [10, 15], lb: 0.6, aliases: ["Pec deck / cable fly", "Pec fly machine", "Machine fly", "Butterfly"] }),
+    { chest: 1 }, { reps: [10, 15], lb: 0.6, aliases: ["Downstairs chest press fly", "Pec deck / cable fly", "Pec fly machine", "Machine fly", "Butterfly"] }),
   ex("cable-crossover", "Cable crossover", "fly", "cable", "stack",
     { chest: 1 }, { reps: [12, 15], lb: 0.7, aliases: ["Cable fly", "Standing cable fly"] }),
   ex("low-to-high-cable-fly", "Low-to-high cable fly", "fly", "cable", "stack",
@@ -91,7 +91,7 @@ export const CURATED = [
 
   // ── Triceps ─────────────────────────────────────────────────────────────
   ex("triceps-rope-pushdown", "Triceps rope pushdown", "elbow-extension", "cable", "stack",
-    { triceps: 1 }, { reps: [10, 15], lb: 0.4, aliases: ["Tricep rope pushdown", "Rope pushdown", "Cable rope pushdown"] }),
+    { triceps: 1 }, { reps: [10, 15], lb: 0.4, aliases: ["Tricep rope pushdown", "Rope pushdown", "Cable rope pushdown", "Rope cable tricep extension"] }),
   ex("v-bar-pushdown", "V-bar pushdown", "elbow-extension", "cable", "stack",
     { triceps: 1 }, { reps: [10, 15], lb: 0.4, aliases: ["V bar pressdown", "V-bar pressdown", "V bar tricep pushdown"] }),
   ex("triceps-pushdown", "Triceps pushdown", "elbow-extension", "cable", "stack",
@@ -99,7 +99,7 @@ export const CURATED = [
   ex("single-arm-pushdown", "Single-arm cable pushdown", "elbow-extension", "cable", "stack",
     { triceps: 1 }, { reps: [12, 15], lb: 0.4, unilateral: true, aliases: ["Single arm pushdown"] }),
   ex("overhead-cable-triceps-extension", "Overhead cable triceps extension", "elbow-extension", "cable", "stack",
-    { triceps: 1 }, { reps: [10, 15], lb: 0.9, aliases: ["Cable overhead rope tricep extension", "Overhead rope extension", "Overhead cable extension", "Cable overhead tricep extension"] }),
+    { triceps: 1 }, { reps: [10, 15], lb: 0.9, aliases: ["Overhead tricep extension", "Cable overhead rope tricep extension", "Overhead rope extension", "Overhead cable extension", "Cable overhead tricep extension"] }),
   ex("dumbbell-overhead-triceps-extension", "Dumbbell overhead triceps extension", "elbow-extension", "dumbbell", "dumbbell-single",
     { triceps: 1 }, { reps: [10, 15], lb: 0.9, aliases: ["DB overhead tricep extension", "Seated dumbbell tricep extension"] }),
   ex("machine-triceps-extension", "Machine triceps extension", "elbow-extension", "machine-stack", "stack",
@@ -109,7 +109,7 @@ export const CURATED = [
 
   // ── Back: vertical pulls ────────────────────────────────────────────────
   ex("lat-pulldown", "Lat pulldown", "vertical-pull", "cable", "stack",
-    { lats: 1, "upper-back": 0.5, biceps: 0.5 }, { k: UC, reps: [8, 12], lb: 0.6, aliases: ["Wide grip lat pulldown", "Cable lat pulldown", "Pulldown"] }),
+    { lats: 1, "upper-back": 0.5, biceps: 0.5 }, { k: UC, reps: [8, 12], lb: 0.6, aliases: ["Weighted pull-up / lat pulldown", "Wide grip lat pulldown", "Cable lat pulldown", "Pulldown"] }),
   ex("close-grip-pulldown", "Close-grip pulldown", "vertical-pull", "cable", "stack",
     { lats: 1, biceps: 0.5, "upper-back": 0.5 }, { k: UC, reps: [8, 12], lb: 0.6, aliases: ["Neutral grip pulldown", "V bar pulldown"] }),
   ex("pull-up", "Pull-up", "vertical-pull", "bodyweight", "bodyweight-plus",
@@ -182,8 +182,10 @@ export const CURATED = [
     { hamstrings: 1, glutes: 1, "lower-back": 0.5, adductors: 0.5 }, { k: LF, reps: [6, 10], lb: 0.9, aliases: ["Barbell Romanian deadlift", "RDL", "Barbell RDL"] }),
   ex("dumbbell-romanian-deadlift", "Dumbbell Romanian deadlift", "hip-hinge", "dumbbell", "dumbbell-pair",
     { hamstrings: 1, glutes: 1, "lower-back": 0.5, adductors: 0.5 }, { k: LF, reps: [8, 12], lb: 0.9, aliases: ["DB RDL", "Dumbbell RDL", "Stiff leg deadlift (DB)", "Dumbbell stiff leg deadlift", "DB stiff leg deadlift"] }),
+  ex("thigh-supported-db-sldl", "Thigh-supported dumbbell stiff-leg deadlift", "hip-hinge", "dumbbell", "dumbbell-pair",
+    { hamstrings: 1, glutes: 1, adductors: 0.5 }, { k: LF, reps: [10, 12], lb: 0.9, stability: "medium", aliases: ["Stiff-leg deadlift (DB) against pad"], note: "Thighs braced against a pad, which takes load off the lower back." }),
   ex("lying-leg-curl", "Lying leg curl", "knee-flexion", "machine-stack", "stack",
-    { hamstrings: 1 }, { reps: [10, 15], lb: 0.5, aliases: ["Leg curl (lying)", "Prone leg curl"] }),
+    { hamstrings: 1 }, { reps: [10, 15], lb: 0.5, aliases: ["Leg curl (lying)", "Prone leg curl", "Leg curl"], note: "Unlabeled \"Leg curl\" history maps here: same Legs day and loads as your lying curl." }),
   ex("seated-leg-curl", "Seated leg curl", "knee-flexion", "machine-stack", "stack",
     { hamstrings: 1 }, { reps: [10, 15], lb: 0.8, aliases: ["Leg curl (seated)", "Seated hamstring curl"] }),
   ex("single-leg-curl", "Single-leg curl", "knee-flexion", "machine-stack", "stack",

@@ -1,0 +1,44 @@
+# Pushes apps-script/ to your Apps Script project and updates the existing
+# web-app deployment (same URL) whenever main changes the backend.
+# Needs one repository secret, CLASPRC_JSON — see DEPLOY-BACKEND.md.
+name: Deploy Apps Script
+
+on:
+  push:
+    branches: [main]
+    paths: ["apps-script/**"]
+  workflow_dispatch:
+
+concurrency: apps-script-deploy
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+      DEPLOYMENT_ID: AKfycbzIeypeOjfnkypcsj7AdMHiO_e23bx3VzSIVy_9A2A8oF03zTTVH0G1BJ7XMV1QS6JJ
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run tests first
+        run: npm test
+      - name: Check for credentials
+        id: creds
+        run: |
+          if [ -z "$CLASPRC_JSON" ]; then
+            echo "CLASPRC_JSON secret not set; skipping deploy. See DEPLOY-BACKEND.md."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Push and redeploy
+        if: steps.creds.outputs.ok == 'true'
+        working-directory: apps-script
+        run: |
+          npm install -g @google/clasp@2.4.2
+          printf '%s' "$CLASPRC_JSON" > ~/.clasprc.json
+          clasp push --force
+          clasp deploy --deploymentId "$DEPLOYMENT_ID" --description "IronLog ${GITHUB_SHA::7}"
+          rm -f ~/.clasprc.json
