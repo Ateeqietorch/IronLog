@@ -1094,11 +1094,29 @@ function clearPersistedOverrideState() { lsSet("il:overrideState", null); }
 async function sheetsCall(params) {
   const url = new URL(SCRIPT_URL);
   Object.entries(params).forEach(([k,v]) => url.searchParams.set(k, typeof v === "string" ? v : JSON.stringify(v)));
+  // Every backend action requires the device key (v3 Phase 1).
+  url.searchParams.set("token", getAuthToken());
   url.searchParams.set("t", Date.now());
   const r = await fetch(url.toString());
   const d = JSON.parse(await r.text());
+  if (!d.ok && d.msg === "unauthorized") handleUnauthorized();
   if (!d.ok) throw new Error(d.msg || "Script error");
   return d;
+}
+
+// The backend accepts one device key (the first one it ever saw). A second
+// phone or a cleared browser has a different key, so instead of failing
+// silently, ask for the key once — it's shown under Library on any device
+// that already works.
+let unauthorizedPrompted = false;
+function handleUnauthorized() {
+  if (unauthorizedPrompted) return;
+  unauthorizedPrompted = true;
+  const entered = (prompt("This device isn't connected to your IronLog sheet yet.\n\nPaste your device key (Library tab on a device that already works), then reload:") || "").trim();
+  if (entered) { setAuthToken(entered); location.reload(); }
+}
+function setAuthToken(t) {
+  try { localStorage.setItem("il:authToken", t); } catch {}
 }
 
 // ── Parse sessions ────────────────────────────────────────────────────────────
@@ -3253,6 +3271,16 @@ async function init() {
   ladderToggle.checked=isLadderEnabled();
   ladderToggle.addEventListener("change",e=>{ setLadderEnabled(e.target.checked); toast(e.target.checked?"Ladder-set testing on":"Ladder-set testing off"); });
   document.getElementById("restore-backup-btn").addEventListener("click",restoreProgramFromServer);
+  document.getElementById("copy-key-btn").addEventListener("click", async () => {
+    const key = getAuthToken();
+    try { await navigator.clipboard.writeText(key); toast("Device key copied"); }
+    catch { prompt("Copy your device key:", key); }
+  });
+  document.getElementById("enter-key-btn").addEventListener("click", () => {
+    const entered = (prompt("Paste the device key from a device that already works:") || "").trim();
+    if (!entered) return;
+    setAuthToken(entered); toast("Key saved. Reloading"); setTimeout(() => location.reload(), 600);
+  });
   document.getElementById("bw-save").addEventListener("click",saveBw);
   document.getElementById("override-toggle").addEventListener("change",e=>{
     overrideMode = e.target.checked;

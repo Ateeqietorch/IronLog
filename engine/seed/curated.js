@@ -1,0 +1,223 @@
+// Hand-curated exercise catalog (source: "seed").
+// Covers every exercise in the v2 app, every exercise in the lifter's logged
+// history that maps cleanly, and the default PPL+UL template
+// (HYPERTROPHY-RESEARCH.md §5). Contributions use 1.0 for prime movers and
+// ~0.5 for meaningful synergists (Pelland et al. 2025 fractional counting).
+// lengthenedBias is a 0–1 tiebreaker for how hard the exercise loads the
+// target muscle in its stretched position (research §2.7); 0.5 = neutral.
+//
+// Aliases are exact alternate names (after normalization). Anything ambiguous
+// is deliberately NOT aliased so it goes to the review list instead.
+
+const ex = (id, name, pattern, equipment, loadType, contributions, o = {}) => ({
+  id, name, pattern, equipment, loadType, contributions,
+  aliases: o.aliases ?? [],
+  unilateral: o.unilateral ?? false,
+  lengthenedBias: o.lb ?? 0.5,
+  stability: o.stability ?? STAB[equipment],
+  kClass: o.k ?? "isolation",
+  defaultRepRange: o.reps ?? [10, 15],
+  source: "seed",
+  confidence: 1,
+  ...(o.bwFraction ? { bwFraction: o.bwFraction } : {}),
+  ...(o.note ? { note: o.note } : {}),
+});
+
+const STAB = {
+  barbell: "low", dumbbell: "low", cable: "medium", "machine-stack": "high",
+  "machine-plate": "high", smith: "high", bodyweight: "medium", assisted: "high", band: "medium",
+};
+
+const UC = "upper-compound", LF = "lower-free", LP = "leg-press";
+
+export const CURATED = [
+  // ── Chest: presses ──────────────────────────────────────────────────────
+  ex("barbell-bench-press", "Barbell bench press", "horizontal-press", "barbell", "plates",
+    { chest: 1, triceps: 0.5, "front-delts": 0.5 }, { k: UC, reps: [6, 10], lb: 0.5, aliases: ["Bench press", "Flat barbell bench press", "Flat bench"] }),
+  ex("dumbbell-bench-press", "Flat dumbbell press", "horizontal-press", "dumbbell", "dumbbell-pair",
+    { chest: 1, triceps: 0.5, "front-delts": 0.5 }, { k: UC, reps: [8, 12], lb: 0.6, aliases: ["Dumbbell bench press", "Flat DB press", "DB bench press"] }),
+  ex("incline-barbell-press", "Incline barbell press", "incline-press", "barbell", "plates",
+    { chest: 1, "front-delts": 0.5, triceps: 0.5 }, { k: UC, reps: [6, 10], aliases: ["Incline barbell bench press", "Incline bench press"] }),
+  ex("incline-dumbbell-press", "Incline dumbbell press", "incline-press", "dumbbell", "dumbbell-pair",
+    { chest: 1, "front-delts": 0.5, triceps: 0.5 }, { k: UC, reps: [8, 12], lb: 0.6, aliases: ["Incline DB press"] }),
+  ex("smith-incline-press", "Smith machine incline press", "incline-press", "smith", "plates",
+    { chest: 1, "front-delts": 0.5, triceps: 0.5 }, { k: UC, reps: [8, 12], aliases: ["Incline Smith press", "Smith incline press"] }),
+  ex("machine-chest-press", "Machine chest press", "horizontal-press", "machine-stack", "stack",
+    { chest: 1, triceps: 0.5, "front-delts": 0.5 }, { k: UC, reps: [8, 12], aliases: ["Chest press machine", "Seated chest press"] }),
+  ex("machine-incline-press", "Pin-loaded incline chest press", "incline-press", "machine-stack", "stack",
+    { chest: 1, "front-delts": 0.5, triceps: 0.5 }, { k: UC, reps: [8, 12], aliases: ["Selectorized incline press"] }),
+  ex("plate-loaded-incline-press", "Plate-loaded incline press", "incline-press", "machine-plate", "plates",
+    { chest: 1, "front-delts": 0.5, triceps: 0.5 }, { k: UC, reps: [8, 12], note: "Load is logged per side.", aliases: ["Machine incline press (plate-loaded, per-side)"] }),
+  ex("push-up", "Push-up", "horizontal-press", "bodyweight", "bodyweight-plus",
+    { chest: 1, triceps: 0.5, "front-delts": 0.5 }, { k: UC, reps: [10, 25], bwFraction: 0.65, aliases: ["Pushup"] }),
+  ex("dip", "Dip", "horizontal-press", "bodyweight", "bodyweight-plus",
+    { chest: 1, triceps: 1, "front-delts": 0.5 }, { k: UC, reps: [6, 12], lb: 0.7, bwFraction: 0.95, aliases: ["Tricep dip", "Triceps dip", "Weighted dip", "Chest dip"] }),
+
+  // ── Chest: flies ────────────────────────────────────────────────────────
+  ex("pec-deck", "Pec deck", "fly", "machine-stack", "stack",
+    { chest: 1 }, { reps: [10, 15], lb: 0.6, aliases: ["Pec deck / cable fly", "Pec fly machine", "Machine fly", "Butterfly"] }),
+  ex("cable-crossover", "Cable crossover", "fly", "cable", "stack",
+    { chest: 1 }, { reps: [12, 15], lb: 0.7, aliases: ["Cable fly", "Standing cable fly"] }),
+  ex("low-to-high-cable-fly", "Low-to-high cable fly", "fly", "cable", "stack",
+    { chest: 1, "front-delts": 0.5 }, { reps: [12, 15], lb: 0.7, aliases: ["Low to high cable fly", "Incline cable fly"] }),
+  ex("dumbbell-fly", "Dumbbell fly", "fly", "dumbbell", "dumbbell-pair",
+    { chest: 1 }, { reps: [10, 15], lb: 0.8, aliases: ["DB fly", "Flat dumbbell fly"] }),
+  ex("freemotion-chest-fly-press", "Freemotion chest fly press", "fly", "cable", "stack",
+    { chest: 1, "front-delts": 0.5 }, { reps: [10, 12], lb: 0.6, note: "Freemotion dual-cable chest station." }),
+
+  // ── Shoulders ───────────────────────────────────────────────────────────
+  ex("barbell-overhead-press", "Barbell overhead press", "vertical-press", "barbell", "plates",
+    { "front-delts": 1, triceps: 0.5, "side-delts": 0.5 }, { k: UC, reps: [6, 10], aliases: ["Overhead press", "Standing overhead press", "Military press", "Barbell shoulder press"] }),
+  ex("dumbbell-shoulder-press", "Dumbbell shoulder press", "vertical-press", "dumbbell", "dumbbell-pair",
+    { "front-delts": 1, triceps: 0.5, "side-delts": 0.5 }, { k: UC, reps: [8, 12], aliases: ["Seated dumbbell shoulder press", "DB shoulder press", "Dumbbell overhead press"] }),
+  ex("machine-shoulder-press", "Machine shoulder press", "vertical-press", "machine-stack", "stack",
+    { "front-delts": 1, triceps: 0.5, "side-delts": 0.5 }, { k: UC, reps: [8, 12], aliases: ["Shoulder press machine", "Seated machine shoulder press"] }),
+  ex("cable-lateral-raise", "Cable lateral raise", "lateral-raise", "cable", "stack",
+    { "side-delts": 1 }, { reps: [12, 20], lb: 0.7, unilateral: true, aliases: ["Single arm cable lateral raise", "Cable side raise"] }),
+  ex("dumbbell-lateral-raise", "Dumbbell lateral raise", "lateral-raise", "dumbbell", "dumbbell-pair",
+    { "side-delts": 1 }, { reps: [12, 20], lb: 0.3, aliases: ["DB lateral raise", "Lateral raise", "Side lateral raise"] }),
+  ex("machine-lateral-raise", "Machine lateral raise", "lateral-raise", "machine-stack", "stack",
+    { "side-delts": 1 }, { reps: [12, 20], lb: 0.5, aliases: ["Seated shoulder lateral raise machine", "Lateral raise machine", "Seated lateral raise machine"] }),
+  ex("cable-y-raise", "Cable Y-raise", "lateral-raise", "cable", "stack",
+    { "side-delts": 1, traps: 0.5 }, { reps: [12, 20], lb: 0.6 }),
+  ex("reverse-pec-deck", "Reverse pec deck", "rear-delt", "machine-stack", "stack",
+    { "rear-delts": 1, "upper-back": 0.5 }, { reps: [12, 20], lb: 0.5, aliases: ["Rear delt machine", "Reverse fly machine", "Rear delt fly machine"] }),
+  ex("rear-delt-fly", "Dumbbell rear delt fly", "rear-delt", "dumbbell", "dumbbell-pair",
+    { "rear-delts": 1, "upper-back": 0.5 }, { reps: [12, 20], lb: 0.4, aliases: ["Rear delt fly", "Bent over rear delt fly", "Reverse dumbbell fly"] }),
+  ex("face-pull", "Face pull", "rear-delt", "cable", "stack",
+    { "rear-delts": 1, "upper-back": 0.5, traps: 0.5 }, { reps: [12, 20], lb: 0.5, aliases: ["Cable face pull", "Rope face pull"] }),
+  ex("upright-row", "Upright row", "lateral-raise", "barbell", "plates",
+    { "side-delts": 1, traps: 0.5 }, { reps: [10, 15], aliases: ["Barbell upright row", "Cable upright row"] }),
+
+  // ── Triceps ─────────────────────────────────────────────────────────────
+  ex("triceps-rope-pushdown", "Triceps rope pushdown", "elbow-extension", "cable", "stack",
+    { triceps: 1 }, { reps: [10, 15], lb: 0.4, aliases: ["Tricep rope pushdown", "Rope pushdown", "Cable rope pushdown"] }),
+  ex("v-bar-pushdown", "V-bar pushdown", "elbow-extension", "cable", "stack",
+    { triceps: 1 }, { reps: [10, 15], lb: 0.4, aliases: ["V bar pressdown", "V-bar pressdown", "V bar tricep pushdown"] }),
+  ex("triceps-pushdown", "Triceps pushdown", "elbow-extension", "cable", "stack",
+    { triceps: 1 }, { reps: [10, 15], lb: 0.4, aliases: ["Tricep pushdown", "Straight bar pushdown", "Cable pushdown", "Machine tricep pushdown"] }),
+  ex("single-arm-pushdown", "Single-arm cable pushdown", "elbow-extension", "cable", "stack",
+    { triceps: 1 }, { reps: [12, 15], lb: 0.4, unilateral: true, aliases: ["Single arm pushdown"] }),
+  ex("overhead-cable-triceps-extension", "Overhead cable triceps extension", "elbow-extension", "cable", "stack",
+    { triceps: 1 }, { reps: [10, 15], lb: 0.9, aliases: ["Cable overhead rope tricep extension", "Overhead rope extension", "Overhead cable extension", "Cable overhead tricep extension"] }),
+  ex("dumbbell-overhead-triceps-extension", "Dumbbell overhead triceps extension", "elbow-extension", "dumbbell", "dumbbell-single",
+    { triceps: 1 }, { reps: [10, 15], lb: 0.9, aliases: ["DB overhead tricep extension", "Seated dumbbell tricep extension"] }),
+  ex("machine-triceps-extension", "Machine triceps extension", "elbow-extension", "machine-stack", "stack",
+    { triceps: 1 }, { reps: [10, 15], lb: 0.5, aliases: ["Tricep ext machine", "Tricep extension machine", "Machine tricep extension", "Seated tricep extension machine"] }),
+  ex("skull-crusher", "EZ-bar skull crusher", "elbow-extension", "barbell", "plates",
+    { triceps: 1 }, { reps: [8, 12], lb: 0.7, aliases: ["Skull crusher", "Lying triceps extension", "EZ bar skull crusher"] }),
+
+  // ── Back: vertical pulls ────────────────────────────────────────────────
+  ex("lat-pulldown", "Lat pulldown", "vertical-pull", "cable", "stack",
+    { lats: 1, "upper-back": 0.5, biceps: 0.5 }, { k: UC, reps: [8, 12], lb: 0.6, aliases: ["Wide grip lat pulldown", "Cable lat pulldown", "Pulldown"] }),
+  ex("close-grip-pulldown", "Close-grip pulldown", "vertical-pull", "cable", "stack",
+    { lats: 1, biceps: 0.5, "upper-back": 0.5 }, { k: UC, reps: [8, 12], lb: 0.6, aliases: ["Neutral grip pulldown", "V bar pulldown"] }),
+  ex("pull-up", "Pull-up", "vertical-pull", "bodyweight", "bodyweight-plus",
+    { lats: 1, "upper-back": 0.5, biceps: 0.5 }, { k: UC, reps: [5, 12], lb: 0.6, bwFraction: 1, aliases: ["Weighted pull up", "Pullup", "Chin up", "Weighted chin up"] }),
+  ex("assisted-pull-up", "Assisted pull-up", "vertical-pull", "assisted", "assisted",
+    { lats: 1, "upper-back": 0.5, biceps: 0.5 }, { k: UC, reps: [6, 12], lb: 0.6, bwFraction: 1, aliases: ["Assisted pull up machine", "Assisted chin up"] }),
+  ex("straight-arm-pulldown", "Straight-arm pulldown", "pullover", "cable", "stack",
+    { lats: 1 }, { reps: [12, 15], lb: 0.8, aliases: ["Straight arm pulldown", "Cable pullover"] }),
+
+  // ── Back: rows ──────────────────────────────────────────────────────────
+  ex("seated-cable-row", "Seated cable row", "horizontal-row", "cable", "stack",
+    { "upper-back": 1, lats: 1, biceps: 0.5, "rear-delts": 0.5 }, { k: UC, reps: [8, 12], lb: 0.6, aliases: ["Cable row", "Seated row"] }),
+  ex("chest-supported-t-bar-row", "Chest-supported T-bar row", "horizontal-row", "machine-plate", "plates",
+    { "upper-back": 1, lats: 0.5, biceps: 0.5, "rear-delts": 0.5 }, { k: UC, reps: [8, 12], lb: 0.5, aliases: ["T bar row", "Chest supported t bar row"] }),
+  ex("chest-supported-db-row", "Chest-supported dumbbell row", "horizontal-row", "dumbbell", "dumbbell-pair",
+    { "upper-back": 1, lats: 0.5, biceps: 0.5, "rear-delts": 0.5 }, { k: UC, reps: [8, 12], lb: 0.5, aliases: ["Chest supported DB row", "Incline dumbbell row", "Seal row"] }),
+  ex("machine-row", "Machine row", "horizontal-row", "machine-stack", "stack",
+    { "upper-back": 1, lats: 0.5, biceps: 0.5, "rear-delts": 0.5 }, { k: UC, reps: [8, 12], lb: 0.5, aliases: ["Mid-back row machine", "Mid back row machine", "Seated row machine", "Chest supported machine row"] }),
+  ex("single-arm-cable-row", "Single-arm cable row", "horizontal-row", "cable", "stack",
+    { lats: 1, "upper-back": 0.5, biceps: 0.5 }, { k: UC, reps: [10, 15], lb: 0.7, unilateral: true, aliases: ["Single arm cable row", "One arm cable row"] }),
+  ex("single-arm-db-row", "Single-arm dumbbell row", "horizontal-row", "dumbbell", "dumbbell-single",
+    { lats: 1, "upper-back": 0.5, biceps: 0.5 }, { k: UC, reps: [8, 12], lb: 0.6, unilateral: true, aliases: ["Single arm DB row", "One arm dumbbell row", "Dumbbell row"] }),
+  ex("barbell-shrug", "Barbell shrug", "shrug", "barbell", "plates",
+    { traps: 1 }, { reps: [10, 15], aliases: ["Shrug"] }),
+
+  // ── Biceps ──────────────────────────────────────────────────────────────
+  ex("ez-bar-curl", "EZ-bar curl", "elbow-flexion", "barbell", "plates",
+    { biceps: 1, forearms: 0.5 }, { reps: [8, 12], lb: 0.4, aliases: ["EZ bar curl", "EZ curl"] }),
+  ex("barbell-curl", "Barbell curl", "elbow-flexion", "barbell", "plates",
+    { biceps: 1, forearms: 0.5 }, { reps: [8, 12], lb: 0.4, aliases: ["Standing barbell curl"] }),
+  ex("dumbbell-curl", "Dumbbell curl", "elbow-flexion", "dumbbell", "dumbbell-pair",
+    { biceps: 1, forearms: 0.5 }, { reps: [10, 15], lb: 0.4, aliases: ["DB curl (same time)", "DB curl", "Standing dumbbell curl", "Simultaneous dumbbell curl"] }),
+  ex("incline-dumbbell-curl", "Incline dumbbell curl", "elbow-flexion", "dumbbell", "dumbbell-pair",
+    { biceps: 1 }, { reps: [10, 15], lb: 0.9, aliases: ["Incline DB curl"] }),
+  ex("hammer-curl", "Hammer curl", "elbow-flexion", "dumbbell", "dumbbell-pair",
+    { biceps: 1, forearms: 1 }, { reps: [10, 15], lb: 0.4, aliases: ["DB hammer curl", "Dumbbell hammer curl"] }),
+  ex("cable-curl", "Cable curl", "elbow-flexion", "cable", "stack",
+    { biceps: 1, forearms: 0.5 }, { reps: [10, 15], lb: 0.5, aliases: ["Standing cable curl", "Straight bar cable curl"] }),
+  ex("bayesian-cable-curl", "Bayesian cable curl", "elbow-flexion", "cable", "stack",
+    { biceps: 1 }, { reps: [10, 15], lb: 0.9, unilateral: true, aliases: ["Facing away cable curl", "Behind the body cable curl", "Bayesian curl"] }),
+  ex("machine-preacher-curl", "Machine preacher curl", "elbow-flexion", "machine-stack", "stack",
+    { biceps: 1 }, { reps: [10, 15], lb: 0.7, aliases: ["Preacher curl machine", "Machine curl"] }),
+  ex("preacher-curl", "EZ-bar preacher curl", "elbow-flexion", "barbell", "plates",
+    { biceps: 1 }, { reps: [8, 12], lb: 0.7, aliases: ["Preacher curl", "EZ bar preacher curl"] }),
+  ex("concentration-curl", "Concentration curl", "elbow-flexion", "dumbbell", "dumbbell-single",
+    { biceps: 1 }, { reps: [10, 15], lb: 0.5, unilateral: true }),
+
+  // ── Quads ───────────────────────────────────────────────────────────────
+  ex("hack-squat", "Hack squat", "squat-machine", "machine-plate", "plates",
+    { quads: 1, glutes: 0.5, adductors: 0.5 }, { k: LP, reps: [6, 10], lb: 0.7, aliases: ["Machine hack squat", "Plate loaded hack squat"] }),
+  ex("smith-hack-squat", "Smith machine hack squat", "squat-machine", "smith", "plates",
+    { quads: 1, glutes: 0.5, adductors: 0.5 }, { k: LP, reps: [6, 10], lb: 0.7, aliases: ["Smith hack squat"] }),
+  ex("leg-press", "Leg press", "leg-press", "machine-plate", "plates",
+    { quads: 1, glutes: 0.5, adductors: 0.5 }, { k: LP, reps: [8, 12], lb: 0.6, aliases: ["45 degree leg press", "Plate loaded leg press"] }),
+  ex("single-leg-press", "Single-leg leg press", "leg-press", "machine-plate", "plates",
+    { quads: 1, glutes: 0.5, adductors: 0.5 }, { k: LP, reps: [8, 12], lb: 0.6, unilateral: true, aliases: ["Single leg leg press", "Single leg press", "Unilateral leg press"] }),
+  ex("leg-extension", "Leg extension", "knee-extension", "machine-stack", "stack",
+    { quads: 1 }, { reps: [10, 15], lb: 0.4, aliases: ["Leg extension machine", "Seated leg extension", "Quad extension"] }),
+  ex("single-leg-extension", "Single-leg extension", "knee-extension", "machine-stack", "stack",
+    { quads: 1 }, { reps: [12, 15], lb: 0.4, unilateral: true, aliases: ["Single leg extension"] }),
+  ex("bulgarian-split-squat", "Bulgarian split squat", "squat-free", "dumbbell", "dumbbell-pair",
+    { quads: 1, glutes: 1, adductors: 0.5 }, { k: LF, reps: [8, 12], lb: 0.8, unilateral: true, aliases: ["Rear foot elevated split squat", "BSS"] }),
+  ex("ffe-split-squat", "Front-foot-elevated split squat", "squat-free", "dumbbell", "dumbbell-pair",
+    { quads: 1, glutes: 1, adductors: 0.5 }, { k: LF, reps: [8, 12], lb: 0.9, unilateral: true, aliases: ["Front foot elevated split squat", "FFE split squat"] }),
+  ex("walking-lunge", "Dumbbell walking lunge", "squat-free", "dumbbell", "dumbbell-pair",
+    { quads: 1, glutes: 1, adductors: 0.5 }, { k: LF, reps: [10, 12], lb: 0.7, unilateral: true, aliases: ["Walking lunges (DB)", "Walking lunge", "Dumbbell lunge"] }),
+
+  // ── Hamstrings / hinge ──────────────────────────────────────────────────
+  ex("romanian-deadlift", "Romanian deadlift", "hip-hinge", "barbell", "plates",
+    { hamstrings: 1, glutes: 1, "lower-back": 0.5, adductors: 0.5 }, { k: LF, reps: [6, 10], lb: 0.9, aliases: ["Barbell Romanian deadlift", "RDL", "Barbell RDL"] }),
+  ex("dumbbell-romanian-deadlift", "Dumbbell Romanian deadlift", "hip-hinge", "dumbbell", "dumbbell-pair",
+    { hamstrings: 1, glutes: 1, "lower-back": 0.5, adductors: 0.5 }, { k: LF, reps: [8, 12], lb: 0.9, aliases: ["DB RDL", "Dumbbell RDL", "Stiff leg deadlift (DB)", "Dumbbell stiff leg deadlift", "DB stiff leg deadlift"] }),
+  ex("lying-leg-curl", "Lying leg curl", "knee-flexion", "machine-stack", "stack",
+    { hamstrings: 1 }, { reps: [10, 15], lb: 0.5, aliases: ["Leg curl (lying)", "Prone leg curl"] }),
+  ex("seated-leg-curl", "Seated leg curl", "knee-flexion", "machine-stack", "stack",
+    { hamstrings: 1 }, { reps: [10, 15], lb: 0.8, aliases: ["Leg curl (seated)", "Seated hamstring curl"] }),
+  ex("single-leg-curl", "Single-leg curl", "knee-flexion", "machine-stack", "stack",
+    { hamstrings: 1 }, { reps: [10, 15], lb: 0.5, unilateral: true, aliases: ["Single leg curl", "Standing leg curl"] }),
+  ex("back-extension-45", "45° back extension", "hip-extension", "bodyweight", "bodyweight-plus",
+    { glutes: 1, hamstrings: 0.5, "lower-back": 0.5 }, { k: LF, reps: [10, 15], lb: 0.6, bwFraction: 0.55, aliases: ["45 degree back extension", "Back extension", "Hyperextension"] }),
+
+  // ── Glutes / hips ───────────────────────────────────────────────────────
+  ex("hip-thrust", "Barbell hip thrust", "hip-extension", "barbell", "plates",
+    { glutes: 1, hamstrings: 0.5 }, { k: LF, reps: [8, 12], lb: 0.2, aliases: ["Hip thrust", "Machine hip thrust"] }),
+  ex("glute-bridge", "Barbell glute bridge", "hip-extension", "barbell", "plates",
+    { glutes: 1, hamstrings: 0.5 }, { k: LF, reps: [8, 12], lb: 0.2, aliases: ["Glute bridge", "Loaded glute bridge"] }),
+  ex("single-leg-hip-thrust", "Single-leg hip thrust", "hip-extension", "bodyweight", "bodyweight-plus",
+    { glutes: 1, hamstrings: 0.5 }, { k: LF, reps: [10, 15], lb: 0.2, unilateral: true, bwFraction: 0.5, aliases: ["Single leg hip thrust"] }),
+  ex("cable-kickback", "Cable glute kickback", "hip-extension", "cable", "stack",
+    { glutes: 1 }, { reps: [12, 20], lb: 0.4, unilateral: true, aliases: ["Cable kickback", "Glute kickback"] }),
+  ex("hip-adduction", "Hip adduction machine", "hip-adduction", "machine-stack", "stack",
+    { adductors: 1 }, { reps: [12, 20], lb: 0.6, aliases: ["Hip adduction", "Adductor machine", "Seated hip adduction"] }),
+  ex("hip-abduction", "Hip abduction machine", "hip-abduction", "machine-stack", "stack",
+    { glutes: 1 }, { reps: [12, 20], lb: 0.4, aliases: ["Hip abduction", "Abductor machine", "Seated hip abduction"] }),
+
+  // ── Calves ──────────────────────────────────────────────────────────────
+  ex("standing-calf-raise", "Standing calf raise", "calf-raise", "machine-stack", "stack",
+    { calves: 1 }, { reps: [10, 15], lb: 0.8, aliases: ["Standing calf raise machine", "Calf raise"] }),
+  ex("seated-calf-raise", "Seated calf raise", "calf-raise", "machine-plate", "plates",
+    { calves: 1 }, { reps: [12, 20], lb: 0.4 }),
+  ex("single-leg-calf-raise", "Single-leg calf raise", "calf-raise", "dumbbell", "dumbbell-single",
+    { calves: 1 }, { reps: [10, 15], lb: 0.8, unilateral: true, aliases: ["Single leg calf raise"] }),
+  ex("leg-press-calf-raise", "Leg press calf raise", "calf-raise", "machine-plate", "plates",
+    { calves: 1 }, { reps: [12, 20], lb: 0.7, aliases: ["Calf press", "Calf press on leg press"] }),
+
+  // ── Trunk ───────────────────────────────────────────────────────────────
+  ex("cable-crunch", "Cable crunch", "trunk", "cable", "stack",
+    { abs: 1 }, { reps: [10, 20], lb: 0.6, aliases: ["Kneeling cable crunch"] }),
+  ex("hanging-leg-raise", "Hanging leg raise", "trunk", "bodyweight", "bodyweight-plus",
+    { abs: 1 }, { reps: [8, 15], lb: 0.6, bwFraction: 0.35, aliases: ["Hanging knee raise"] }),
+];

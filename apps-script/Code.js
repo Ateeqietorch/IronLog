@@ -24,6 +24,11 @@ function doGet(e) {
     const ss     = SpreadsheetApp.getActiveSpreadsheet();
     const action = e.parameter.action;
 
+    // Every action requires the device key (v3 Phase 1). Before this, only
+    // program backup was gated, so anyone who found this URL in the public
+    // repo could read or wipe the log and spend the Anthropic key.
+    if (!checkAuthToken(e.parameter.token)) return respond({ ok: false, msg: "unauthorized" });
+
     // ── Sessions ──────────────────────────────────────────────────────────────
     if (action === "read") {
       const rows = ss.getSheetByName(SESSIONS_SHEET).getDataRange().getValues();
@@ -441,6 +446,90 @@ function doGet(e) {
     return respond({ ok: false, msg: "unknown action: " + action });
 
   } catch(err) {
+    return respond({ ok: false, msg: err.toString() });
+  }
+}
+
+// ── v3 data layer (JSON over POST) ──────────────────────────────────────────
+// Body: text/plain JSON { action, token, ... } — text/plain keeps the browser
+// from sending a CORS preflight, which Apps Script can't answer.
+// v3 tables are key/value: one row per record, the record stored as JSON.
+// That keeps the schema owned by the engine (COACH-ENGINE-SPEC.md §3) instead
+// of by spreadsheet column order, and makes every table the same three calls.
+const V3_TABLES = {
+  Exercises:      ["Id", "UpdatedAt", "JSON"],
+  ExerciseModels: ["Key", "UpdatedAt", "JSON"],
+  GymProfiles:    ["Id", "UpdatedAt", "JSON"],
+  Trials:         ["Id", "UpdatedAt", "JSON"],
+  Review:         ["Name", "UpdatedAt", "JSON"],
+};
+
+function doPost(e) {
+  try {
+    let body = {};
+    try { body = JSON.parse((e.postData && e.postData.contents) || "{}"); }
+    catch (err) { return respond({ ok: false, msg: "bad json" }); }
+    if (!checkAuthToken(body.token)) return respond({ ok: false, msg: "unauthorized" });
+
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const action = body.action;
+
+    if (action === "ping") return respond({ ok: true, msg: "pong" });
+
+    if (action === "table_list" || action === "table_upsert" || action === "table_delete") {
+      const headers = V3_TABLES[body.table];
+      if (!headers) return respond({ ok: false, msg: "unknown table: " + body.table });
+      const sheet = getOrCreateSheet(ss, body.table, headers);
+
+      if (action === "table_list") {
+        const data = sheet.getDataRange().getValues();
+        const records = [];
+        for (let i = 1; i < data.length; i++) {
+          if (!data[i][0]) continue;
+          try { records.push({ key: String(data[i][0]), updatedAt: String(data[i][1]), value: JSON.parse(data[i][2]) }); }
+          catch (err) { records.push({ key: String(data[i][0]), updatedAt: String(data[i][1]), error: "unreadable JSON" }); }
+        }
+        return respond({ ok: true, records });
+      }
+
+      const lock = LockService.getScriptLock();
+      lock.waitLock(20000);
+      try {
+        const data = sheet.getDataRange().getValues();
+        const rowOf = {};
+        for (let i = 1; i < data.length; i++) if (data[i][0]) rowOf[String(data[i][0])] = i + 1;
+
+        if (action === "table_upsert") {
+          const records = body.records || [];
+          if (!Array.isArray(records) || records.length > 500) return respond({ ok: false, msg: "records must be an array of at most 500" });
+          const now = new Date().toISOString();
+          const appends = [];
+          const pending = {};
+          records.forEach(rec => {
+            const key = String(rec.key || "").trim();
+            if (!key) return;
+            const json = JSON.stringify(rec.value);
+            if (json.length > 45000) throw new Error("record too large: " + key);
+            if (rowOf[key]) sheet.getRange(rowOf[key], 1, 1, 3).setValues([[key, now, json]]);
+            else if (pending[key] != null) appends[pending[key]] = [key, now, json];
+            else { pending[key] = appends.length; appends.push([key, now, json]); }
+          });
+          if (appends.length) sheet.getRange(sheet.getLastRow() + 1, 1, appends.length, 3).setValues(appends);
+          return respond({ ok: true, upserted: records.length, updatedAt: now });
+        }
+
+        // table_delete
+        const keys = (body.keys || []).map(String);
+        const rows = keys.map(k => rowOf[k]).filter(r => r > 0).sort((a, b) => b - a);
+        rows.forEach(r => sheet.deleteRow(r));
+        return respond({ ok: true, deleted: rows.length });
+      } finally {
+        lock.releaseLock();
+      }
+    }
+
+    return respond({ ok: false, msg: "unknown action: " + action });
+  } catch (err) {
     return respond({ ok: false, msg: err.toString() });
   }
 }

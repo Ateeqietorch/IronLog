@@ -1,10 +1,15 @@
-const CACHE_NAME = "ironlog-shell-v2";
+const CACHE_NAME = "ironlog-shell-v3";
 const SHELL_FILES = [
   "./",
   "./index.html",
   "./app.js",
   "./ui/main.js",
   "./engine/index.js",
+  "./engine/catalog.js",
+  "./engine/seed/curated.js",
+  "./data/config.js",
+  "./data/sheets.js",
+  "./data/catalog-store.js",
   "./style.css",
   "./manifest.json",
   "./icons/icon-192.png",
