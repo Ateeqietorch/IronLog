@@ -7,23 +7,10 @@ import { readFileSync } from "node:fs";
 import { indexCatalog, mergeCatalogs, mapHistoryNames } from "../engine/catalog.js";
 import { CURATED } from "../engine/seed/curated.js";
 import { FREE_EXERCISE_DB } from "../engine/seed/free-exercise-db.js";
+import { parseCsv } from "./lib/csv.js";
 
 const [csvPath, decisionsPath] = process.argv.slice(2);
 const decisions = decisionsPath ? JSON.parse(readFileSync(decisionsPath, "utf8")) : {};
-
-function parseCsv(text) {
-  const rows = []; let row = [], cell = "", q = false;
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i];
-    if (q) { if (c === '"' && text[i + 1] === '"') { cell += '"'; i++; } else if (c === '"') q = false; else cell += c; }
-    else if (c === '"') q = true;
-    else if (c === ",") { row.push(cell); cell = ""; }
-    else if (c === "\n" || c === "\r") { if (c === "\r" && text[i + 1] === "\n") i++; row.push(cell); rows.push(row); row = []; cell = ""; }
-    else cell += c;
-  }
-  if (cell || row.length) { row.push(cell); rows.push(row); }
-  return rows;
-}
 
 const rows = parseCsv(readFileSync(csvPath, "utf8")).slice(1);
 const counts = new Map();

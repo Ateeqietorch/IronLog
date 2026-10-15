@@ -1,6 +1,17 @@
 # Decisions log
 Choices made where the specs were ambiguous. Newest first.
 
+## Phase 2 — 2026-10-15
+- **Models are rebuilt from your log, not stored separately.** The workout log is the source of truth; replaying ~800 sets takes milliseconds, so every model is derived on load. Nothing can drift out of sync. (The ExerciseModels tab stays available for later caching.)
+- **Expected progress.** Before each session the estimate is nudged up ~1% per week (none after 10+ days off or in a deload), then corrected by what you actually do. Without it, doing exactly what was prescribed would never move the numbers. Spec scenario 1 is tested as "four on-plan weeks move the prescription forward" rather than "one session adds a rep", because a 1% gain is often less than one rep.
+- **Readiness inside a session.** The in-session copy of the model gets extra day-to-day uncertainty (3%), so one set that runs hot or cold changes the remaining sets by about a rep, without rewriting the long-term model.
+- **Mid-session load changes only when needed.** Remaining sets keep the planned load and only their reps change, unless the new reps would fall outside the rep range by more than 2 below / 3 above.
+- **One-rung-down limit is off after a gap.** It exists to stop one bad day from tanking the next session; after 10+ days away the extra reps in reserve already lighten the load.
+- **Outlier handling.** Sets of 0 lb or 0 reps are ignored. Any single set can move the estimate at most 2.5 standard deviations (typos like "6" for 60). Unrated sets that look weaker than expected count a quarter as much (probably not taken near failure).
+- **Settings tuned on your history** (`scripts/replay.js`, grid search): week-to-week noise 4%, expected gain 1%/week, unrated sets assumed ~0.5 reps from failure, extra uncertainty for the first 4 exposures to an exercise. Larger noise than the spec's 1% fits a log with machine swaps, missing RPE, and long breaks.
+- **Accuracy today:** ±2.4 reps after three sessions on an exercise, against a target of ±1.5. "Same reps as last time" scores ±1.3 when you repeat a load, so the engine isn't there yet. 70% of logged sets have no RPE, which is the biggest source of error; once every set carries a reps-in-reserve tap (Phase 3) and the RIR-bias learner runs (Phase 6), this should drop. The health panel (Phase 7) will track it.
+- **UI wiring moved to Phase 3.** Showing v3 numbers and saving planned-vs-actual per set happens in the new Train screen instead of being bolted onto the v2 screen that Phase 3 replaces.
+
 ## Phase 1 follow-up — 2026-10-15
 - **Backend lockdown removed at Ateeq's request.** Actions stay open as in v2 (only program backup checks the key). The v3 tables (`doPost`) are also open. Deploying the backend is now a plain paste-and-redeploy with no key reset. Revisit if the app is ever shared.
 
