@@ -46,12 +46,6 @@ export function renderProgress(root) {
   root.querySelector("#settings-btn").onclick = settingsSheet;
 }
 
-export function renderCoach(root) {
-  root.innerHTML = `<header class="p-head"><h1>Coach</h1></header>
-    <div class="empty">The conversational coach comes in a later update. It will explain any number, rebuild a session when you're short on time, and suggest swaps.<br><br>Until then, the AI review and reconsider tools from the old app are still in the classic view.
-      <a class="secondary" style="margin-top:16px;text-decoration:none" href="v2.html">Open classic IronLog</a></div>`;
-}
-
 export function settingsSheet() {
   const s = state.settings;
   const seg = (v, label) => `<button data-policy="${v}" aria-pressed="${s.policy === v}">${label}</button>`;

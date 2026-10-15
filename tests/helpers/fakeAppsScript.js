@@ -24,7 +24,8 @@ class FakeSheet {
   }
 }
 
-export function loadBackend({ sheets = {}, props = {} } = {}) {
+export function loadBackend({ sheets = {}, props = {}, fetchReplies = [] } = {}) {
+  const fetched = [];
   const book = new Map(Object.entries(sheets).map(([n, rows]) => [n, new FakeSheet(n, rows)]));
   const store = { ...props };
   const ctx = {
@@ -42,7 +43,12 @@ export function loadBackend({ sheets = {}, props = {} } = {}) {
       MimeType: { JSON: "json" },
       createTextOutput: (t) => ({ setMimeType: () => ({ body: JSON.parse(t) }) }),
     },
-    UrlFetchApp: { fetch: () => { throw new Error("network disabled in tests"); } },
+    UrlFetchApp: { fetch: (url, opts) => {
+      if (!fetchReplies.length) throw new Error("network disabled in tests");
+      fetched.push({ url, payload: JSON.parse(opts.payload) });
+      const r = fetchReplies.shift();
+      return { getResponseCode: () => r.code ?? 200, getContentText: () => JSON.stringify(r.body) };
+    } },
   };
   vm.createContext(ctx);
   vm.runInContext(readFileSync(new URL("../../apps-script/Code.js", import.meta.url), "utf8"), ctx);
@@ -51,5 +57,6 @@ export function loadBackend({ sheets = {}, props = {} } = {}) {
     post: (body) => ctx.doPost({ postData: { contents: JSON.stringify(body) } }).body,
     sheet: (n) => book.get(n),
     props: store,
+    fetched,
   };
 }

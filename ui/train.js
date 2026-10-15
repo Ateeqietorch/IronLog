@@ -1,5 +1,5 @@
 // Train screen (DESIGN-SPEC.md §5.1–5.5).
-import { state, setSession, startDay, finishSession, hasPending } from "./store.js";
+import { state, setSession, startDay, finishSession, hasPending, undo } from "./store.js";
 import { logSet, target, isDone, sessionDone, anyLogged, stepLoad } from "./session.js";
 import { nextDay } from "../data/program.js";
 import { statusLine } from "../engine/meso.js";
@@ -94,7 +94,11 @@ function nowCard(s, e) {
     <div class="card-top">
       <div>
         <div class="ex-name">${esc(e.ex?.name ?? e.name)}${e.mode === "calibrating" && e.logged.length === 0 ? `<span class="pill">Calibrating</span>` : ""}</div>
-        <div class="ex-sub">${done ? "All sets done" : `Set ${si + 1} of ${e.sets}`}</div>
+        <div class="ex-sub">Exercise ${s.cur + 1} of ${s.exercises.length} · ${done ? "all sets done" : `set ${si + 1} of ${e.sets}`}${e.switchedFrom ? ` · instead of ${esc(e.switchedFrom)}` : ""}</div>
+      </div>
+      <div class="ex-nav">
+        <button class="icon-btn" id="prev-ex" aria-label="Previous exercise" ${s.cur === 0 ? "disabled" : ""}><i class="ti ti-chevron-left" aria-hidden="true"></i></button>
+        <button class="icon-btn" id="next-ex" aria-label="Next exercise" ${s.cur === s.exercises.length - 1 ? "disabled" : ""}><i class="ti ti-chevron-right" aria-hidden="true"></i></button>
       </div>
     </div>
     ${done ? "" : `
@@ -152,6 +156,8 @@ function bind(root, s) {
   root.querySelectorAll("[data-jump]").forEach((b) => b.addEventListener("click", () => setSession({ ...s, cur: Number(b.dataset.jump) })));
   root.querySelectorAll("[data-edit]").forEach((b) => b.addEventListener("click", () => editSheet(Number(b.dataset.edit))));
   root.querySelector("#why")?.addEventListener("click", whySheet);
+  root.querySelector("#prev-ex")?.addEventListener("click", () => s.cur > 0 && setSession({ ...s, cur: s.cur - 1 }));
+  root.querySelector("#next-ex")?.addEventListener("click", () => s.cur < s.exercises.length - 1 && setSession({ ...s, cur: s.cur + 1 }));
   root.querySelector("#edit-btn")?.addEventListener("click", () => editSheet(null));
   root.querySelector("#log-btn")?.addEventListener("click", () => {
     const e = s.exercises[s.cur];
@@ -170,10 +176,11 @@ function commit(exIdx, entry) {
   const e = before.exercises[exIdx];
   const next = logSet(before, exIdx, entry, Date.now());
   buzz(15);
-  setSession(next);
+  setSession(next, { undoable: true });
   const ex = e.ex;
   if (!isDone(next.exercises[exIdx]) || !sessionDone(next)) startRest(ex);
-  if (isDone(next.exercises[exIdx]) && !sessionDone(next)) toast(`${ex?.name ?? e.name} done`);
+  const what = isDone(next.exercises[exIdx]) ? `${ex?.name ?? e.name} done` : `Set ${(entry.index ?? e.logged.length) + 1} logged`;
+  toast(what, { label: "Undo", fn: () => { undo(); toast("Set removed"); } });
 }
 
 function dayPicker() {

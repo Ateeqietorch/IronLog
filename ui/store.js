@@ -7,7 +7,7 @@ import { mesoWeek } from "../engine/meso.js";
 import { tables } from "../data/sheets.js";
 import { readLog, readBodyweight, writeSession } from "../data/log.js";
 import { loadProgram, nextDay } from "../data/program.js";
-import { buildSession, toRows } from "./session.js";
+import { buildSession, toRows, applyChanges } from "./session.js";
 
 const K = { session: "il3:session", log: "il3:logCache", meso: "il3:meso", settings: "il3:settings", pending: "il3:pending", bw: "il3:bodyweight" };
 
@@ -92,12 +92,23 @@ export function startDay(dayKey, { persist = true } = {}) {
   if (persist) saveDraft(); else ls.del(K.session);
 }
 
-export function setSession(s) {
+let undoSnapshot = null;
+export function setSession(s, { undoable = false } = {}) {
+  undoSnapshot = undoable ? state.session : null;
   state.session = s;
   if (!state.meso && s.startedAt) { state.meso = { start: s.date }; ls.set(K.meso, state.meso); }
   saveDraft();
   emit();
 }
+
+export function undo() {
+  if (!undoSnapshot) return false;
+  state.session = undoSnapshot;
+  undoSnapshot = null;
+  saveDraft(); emit();
+  return true;
+}
+export const canUndo = () => !!undoSnapshot;
 
 export function saveDraft() { ls.set(K.session, state.session); }
 
@@ -150,3 +161,11 @@ export async function retryPending() {
 }
 
 export const hasPending = () => !!ls.get(K.pending, null);
+
+// Coach proposals: change_day restarts today on another day; everything else
+// edits today's session through applyChanges (engine recomputes the numbers).
+export function applyProposal(changes) {
+  const day = changes.find((c) => c.type === "change_day");
+  if (day) { startDay(day.dayKey); setSession(state.session); return; }
+  setSession(applyChanges(state.session, changes, { index: state.index, models: state.models }), { undoable: true });
+}

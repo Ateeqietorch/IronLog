@@ -17,13 +17,20 @@ export function closeSheet() { scrimEl?.remove(); scrimEl = null; }
 document.addEventListener("keydown", (ev) => { if (ev.key === "Escape") closeSheet(); });
 
 let toastTimer = null;
-export function toast(msg) {
+export function toast(msg, action = null) {
   document.querySelector(".toast")?.remove();
   const t = document.createElement("div");
-  t.className = "toast"; t.setAttribute("role", "status"); t.textContent = msg;
+  t.className = "toast"; t.setAttribute("role", "status");
+  const span = document.createElement("span"); span.textContent = msg; t.appendChild(span);
+  if (action) {
+    const b = document.createElement("button");
+    b.className = "toast-act"; b.textContent = action.label;
+    b.onclick = () => { t.remove(); action.fn(); };
+    t.appendChild(b);
+  }
   document.body.appendChild(t);
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => t.remove(), 2200);
+  toastTimer = setTimeout(() => t.remove(), action ? 5000 : 2200);
 }
 
 let hapticsOn = true;

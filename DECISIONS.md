@@ -1,6 +1,15 @@
 # Decisions log
 Choices made where the specs were ambiguous. Newest first.
 
+## Phase 3 follow-up + coach — 2026-10-15
+- **Tighter Train screen.** Smaller hero numbers (62px), two-line reason (tap for the full why), shorter rows, and padding for the iPhone status bar, so the whole current exercise and its button fit without scrolling.
+- **Going back.** ‹ › arrows on the exercise card move between exercises; done exercises in Up next are tappable; any logged set can be tapped to fix it; every logged set shows an Undo toast for 5 seconds.
+- **Coach moved up from Phase 9 at Ateeq's request, built on Apps Script instead of a Cloudflare Worker** (no new accounts; reuses the Anthropic key already in Script Properties). No streaming; a reply takes a few seconds.
+- **Coach tools:** `propose_changes` (switch, skip, set count, reorder, change day — today only, shown as a card with Apply / Not now), `remember` and `forget` (CoachMemory tab). It never sets loads or reps; applied changes go through the engine. Switching an exercise that already has logged sets is refused.
+- **Context sent per message:** today's plan and logged sets, last 6 sessions, strength estimates, program, settings, prediction accuracy, and the curated catalog (id, name, pattern, muscles, equipment) so switches use real ids.
+- **Model:** `claude-sonnet-5-5`, falling back to the backend's existing model id if that's unavailable.
+- **Rest dock shows only on Train** (it was covering the coach's message box).
+
 ## Phase 3 — 2026-10-15
 - **v3 is the main page; classic v2 lives at `v2.html`.** Settings and the Coach tab link to it. Both read the same sheet and the same program, so you can go back and forth.
 - **Your program carries over.** v3 reads the program v2 kept in this browser (all your days, sets, rep ranges). On a fresh device it falls back to the PPL+UL template. Phase 6 moves the program into the sheet.

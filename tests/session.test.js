@@ -103,3 +103,31 @@ test("program: v2 program is read and mapped; template is the fallback; rotation
   assert.equal(t.source, "template");
   assert.ok(t.days.every((d) => d.exercises.every((e) => index.byId.has(e.exerciseId))));
 });
+
+import { applyChanges, validateChange, describeChange } from "../ui/session.js";
+
+test("coach proposals: switch, set count, skip and move apply to today only", () => {
+  const models = { "incline-dumbbell-press|both": trained("incline-dumbbell-press", 85, 32) };
+  const s = buildSession({ day, index, models, date: "2026-09-29", weekInfo: week });
+  const changes = [
+    { type: "switch_exercise", exerciseIndex: 1, toExerciseId: "pec-deck" },
+    { type: "set_count", exerciseIndex: 0, sets: 2 },
+    { type: "skip_exercise", exerciseIndex: 2 },
+  ];
+  for (const c of changes) assert.equal(validateChange(s, c, index, { days: [] }), null);
+  assert.match(describeChange(s, changes[0], index), /Swap Machine chest press for Pec deck/);
+  const t = applyChanges(s, changes, { index, models });
+  assert.deepEqual(t.exercises.map((e) => e.ex?.id ?? e.name), ["incline-dumbbell-press", "pec-deck"]);
+  assert.equal(t.exercises[0].sets, 2);
+  assert.equal(t.exercises[1].switchedFrom, "Machine chest press");
+  assert.equal(day.exercises[1].exerciseId, "machine-chest-press", "program untouched");
+  const moved = applyChanges(t, [{ type: "move_exercise", exerciseIndex: 1, toPosition: 0 }], { index, models });
+  assert.equal(moved.exercises[0].ex.id, "pec-deck");
+});
+
+test("coach proposals can't switch an exercise you've already logged or invent ids", () => {
+  let s = buildSession({ day, index, models: {}, date: "2026-09-29", weekInfo: week });
+  s = logSet(s, 1, { load: 140, reps: 10, rir: 2 });
+  assert.match(validateChange(s, { type: "switch_exercise", exerciseIndex: 1, toExerciseId: "pec-deck" }, index, { days: [] }), /already logged/);
+  assert.match(validateChange(s, { type: "switch_exercise", exerciseIndex: 0, toExerciseId: "made-up" }, index, { days: [] }), /catalog/);
+});

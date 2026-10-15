@@ -458,7 +458,126 @@ const V3_TABLES = {
   GymProfiles:    ["Id", "UpdatedAt", "JSON"],
   Trials:         ["Id", "UpdatedAt", "JSON"],
   Review:         ["Name", "UpdatedAt", "JSON"],
+  CoachMemory:    ["Id", "UpdatedAt", "JSON"],
 };
+
+// ── Coach (conversational agent) ───────────────────────────────────────────
+// The coach reads everything the app knows (sent as context by the client),
+// can remember things across conversations, and can PROPOSE changes to
+// today's workout. It never sets weights or reps: the engine does that, and
+// every proposal is shown to the lifter to approve.
+const COACH_MODEL = "claude-sonnet-5-5";
+
+const COACH_TOOLS = [
+  {
+    name: "propose_changes",
+    description: "Propose changes to TODAY's workout. They're shown to the lifter as a card with Apply / Not now; nothing changes until they tap Apply. The app's engine recomputes exact weights and reps for anything you change, so never specify loads or reps.",
+    input_schema: {
+      type: "object",
+      properties: {
+        summary: { type: "string", description: "One short sentence describing the change, in plain language." },
+        changes: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              type: { type: "string", enum: ["switch_exercise", "skip_exercise", "set_count", "move_exercise", "change_day"] },
+              exerciseIndex: { type: "integer", description: "Index in today's exercise list (0-based)." },
+              toExerciseId: { type: "string", description: "For switch_exercise: an exercise id from the catalog list in context." },
+              sets: { type: "integer", minimum: 1, maximum: 8, description: "For set_count." },
+              toPosition: { type: "integer", description: "For move_exercise (0-based)." },
+              dayKey: { type: "string", description: "For change_day: a key from the program days in context." }
+            },
+            required: ["type"]
+          }
+        }
+      },
+      required: ["summary", "changes"]
+    }
+  },
+  {
+    name: "remember",
+    description: "Save a durable fact about the lifter for future conversations (an injury, equipment their gym lacks, a preference). Keep it to one short sentence. Don't save one-off moods or things already in context.",
+    input_schema: { type: "object", properties: { note: { type: "string" } }, required: ["note"] }
+  },
+  {
+    name: "forget",
+    description: "Delete a remembered note that's no longer true, by its id from the memory list in context.",
+    input_schema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] }
+  }
+];
+
+function coachSystem(context, memory) {
+  return [
+    "You are the coach inside IronLog, a hypertrophy training app. You're talking with the lifter on their phone, often mid-workout, so be brief: a few short sentences, no headings, no bullet lists unless they ask for a plan. Plain, direct, friendly. Weights are in pounds.",
+    "How the app works: a deterministic engine sets every weight and rep from the lifter's logged sets (a per-exercise strength estimate, a rep-range aim, and a reps-in-reserve target for the week). You don't pick numbers. When you explain a number, use the reason and estimate in context. If the lifter wants different numbers, tell them to log what they actually do; the engine adapts set to set.",
+    "You can change today's workout only through propose_changes (switch, skip, set count, reorder, change day). Use it when the lifter asks for a change or clearly needs one (pain, missing equipment, short on time). For switches, choose toExerciseId from the catalog list in context, matching the movement pattern and muscles. Prefer exercises that load the muscle at long lengths when choices are equal.",
+    "Evidence you can rely on: about 10+ hard sets per muscle per week, sets taken to roughly 0-3 reps from failure, rest of 90 seconds or more, deloads every 4-6 weeks or when performance drops, adding reps or load both build muscle. Never tell them to train through sharp or joint pain; suggest a pain-free alternative or skipping, and seeing a professional if it persists.",
+    "Constraints from the lifter: avoid barbell back squats, conventional deadlifts, and unsupported bent-over rows unless they ask.",
+    "Use remember for durable facts only (injuries, equipment, preferences). Don't mention the tools by name.",
+    "",
+    "Remembered notes (id: note):",
+    memory.length ? memory.map(m => m.key + ": " + m.value.note).join("\n") : "(none yet)",
+    "",
+    "App context (JSON):",
+    JSON.stringify(context)
+  ].join("\n");
+}
+
+function callClaudeRaw(payload) {
+  const apiKey = PropertiesService.getScriptProperties().getProperty("ANTHROPIC_API_KEY");
+  if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set in Script Properties");
+  const resp = UrlFetchApp.fetch("https://api.anthropic.com/v1/messages", {
+    method: "post", contentType: "application/json",
+    headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
+    payload: JSON.stringify(payload), muteHttpExceptions: true
+  });
+  return { code: resp.getResponseCode(), body: JSON.parse(resp.getContentText()) };
+}
+
+function runCoach(ss, body) {
+  const memSheet = getOrCreateSheet(ss, "CoachMemory", V3_TABLES.CoachMemory);
+  const memData = memSheet.getDataRange().getValues();
+  const memory = [];
+  for (let i = 1; i < memData.length; i++) {
+    if (!memData[i][0]) continue;
+    try { memory.push({ key: String(memData[i][0]), value: JSON.parse(memData[i][2]) }); } catch (e) {}
+  }
+  const messages = (body.messages || []).slice(-20).map(m => ({ role: m.role === "assistant" ? "assistant" : "user", content: String(m.content || "").slice(0, 4000) }));
+  if (!messages.length || messages[messages.length - 1].role !== "user") throw new Error("last message must be from the lifter");
+
+  const proposals = [];
+  const remembered = [];
+  let model = COACH_MODEL;
+  let reply = "";
+  for (let turn = 0; turn < 5; turn++) {
+    let res = callClaudeRaw({ model, max_tokens: 1200, system: coachSystem(body.context || {}, memory), tools: COACH_TOOLS, messages });
+    if (res.code === 404 && model !== CLAUDE_MODEL) { model = CLAUDE_MODEL; res = callClaudeRaw({ model, max_tokens: 1200, system: coachSystem(body.context || {}, memory), tools: COACH_TOOLS, messages }); }
+    if (res.code !== 200) throw new Error("Claude API error " + res.code + ": " + (res.body.error ? res.body.error.message : "unknown"));
+    const content = res.body.content || [];
+    reply += content.filter(b => b.type === "text").map(b => b.text).join("\n");
+    const uses = content.filter(b => b.type === "tool_use");
+    if (res.body.stop_reason !== "tool_use" || !uses.length) break;
+    messages.push({ role: "assistant", content });
+    const results = uses.map(u => {
+      let out = "ok";
+      if (u.name === "propose_changes") { proposals.push(u.input); out = "Shown to the lifter as a card with Apply / Not now. Don't repeat the details; one short line pointing to it is enough."; }
+      else if (u.name === "remember" && u.input && u.input.note) {
+        const id = "m" + new Date().getTime() + "-" + remembered.length;
+        memSheet.appendRow([id, new Date().toISOString(), JSON.stringify({ note: String(u.input.note).slice(0, 300) })]);
+        remembered.push(u.input.note); out = "Saved.";
+      } else if (u.name === "forget" && u.input && u.input.id) {
+        const data = memSheet.getDataRange().getValues();
+        for (let i = data.length - 1; i >= 1; i--) if (String(data[i][0]) === String(u.input.id)) memSheet.deleteRow(i + 1);
+        out = "Deleted.";
+      }
+      return { type: "tool_result", tool_use_id: u.id, content: out };
+    });
+    messages.push({ role: "user", content: results });
+    reply = reply ? reply + "\n" : "";
+  }
+  return { reply: reply.trim(), proposals, remembered, model };
+}
 
 function doPost(e) {
   try {
@@ -470,6 +589,8 @@ function doPost(e) {
     const action = body.action;
 
     if (action === "ping") return respond({ ok: true, msg: "pong" });
+
+    if (action === "coach") return respond(Object.assign({ ok: true }, runCoach(ss, body)));
 
     if (action === "table_list" || action === "table_upsert" || action === "table_delete") {
       const headers = V3_TABLES[body.table];

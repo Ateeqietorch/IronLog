@@ -148,3 +148,66 @@ export function stepLoad(ex, load, dir, gymProfile = null) {
 }
 
 export { loadFor };
+
+// ── Coach proposals (applied only after the lifter taps Apply) ─────────────
+export function describeChange(s, c, index) {
+  const name = (i) => s.exercises[i]?.ex?.name ?? s.exercises[i]?.name ?? `exercise ${i + 1}`;
+  switch (c.type) {
+    case "switch_exercise": return `Swap ${name(c.exerciseIndex)} for ${index.byId.get(c.toExerciseId)?.name ?? c.toExerciseId} (today only)`;
+    case "skip_exercise": return `Skip ${name(c.exerciseIndex)}`;
+    case "set_count": return `${name(c.exerciseIndex)}: ${c.sets} sets`;
+    case "move_exercise": return `Move ${name(c.exerciseIndex)} to position ${c.toPosition + 1}`;
+    case "change_day": return `Switch today's workout to ${c.dayKey}`;
+    default: return "Unknown change";
+  }
+}
+
+export function validateChange(s, c, index, program) {
+  const e = s.exercises[c.exerciseIndex];
+  if (c.type === "change_day") return program.days.some((d) => d.key === c.dayKey) ? null : "That day isn't in your program.";
+  if (!e) return "That exercise isn't in today's workout.";
+  if (c.type === "switch_exercise") {
+    if (!index.byId.has(c.toExerciseId)) return "That exercise isn't in the catalog.";
+    if (e.logged.length) return `You've already logged sets of ${e.ex?.name ?? e.name}.`;
+  }
+  if (c.type === "set_count" && !(c.sets >= 1)) return "Invalid set count.";
+  return null;
+}
+
+// Apply a list of changes to today's session (not the program).
+export function applyChanges(session, changes, { index, models }) {
+  let s = structuredClone(session);
+  const wk = s.weekInfo;
+  const replan = (e, slot) => {
+    const ex = index.byId.get(slot.exerciseId);
+    const p = planExercise({ slot, ex, models, date: s.date, weekInfo: wk, bodyweight: s.bodyweight, policy: s.policy, gymProfile: s.gymProfile });
+    return { ...e, slot, ex, name: slot.name, ...p, model: p.model, models: p.models, sets: p.plan?.sets.length ?? slot.sets };
+  };
+  // Removals last so indices stay valid while applying the others.
+  const ordered = [...changes].sort((a, b) => (a.type === "skip_exercise") - (b.type === "skip_exercise") || (b.exerciseIndex ?? 0) - (a.exerciseIndex ?? 0));
+  for (const c of ordered) {
+    const e = s.exercises[c.exerciseIndex];
+    if (c.type === "switch_exercise" && e && !e.logged.length) {
+      const ex = index.byId.get(c.toExerciseId);
+      if (!ex) continue;
+      const slot = { ...e.slot, name: ex.name, exerciseId: ex.id, repRange: ex.defaultRepRange, unilateral: ex.unilateral, programWeight: null };
+      s.exercises[c.exerciseIndex] = { ...replan(e, slot), logged: [], switchedFrom: e.ex?.name ?? e.name };
+    } else if (c.type === "set_count" && e) {
+      const n = Math.max(c.sets, e.logged.length);
+      if (!e.ex) { e.sets = n; continue; }
+      const fresh = replan(e, { ...e.slot, sets: n });
+      s.exercises[c.exerciseIndex] = { ...fresh, logged: e.logged, sets: Math.max(n, e.logged.length) };
+    } else if (c.type === "skip_exercise" && e) {
+      if (e.logged.length) e.sets = e.logged.length;
+      else s.exercises.splice(c.exerciseIndex, 1);
+    }
+  }
+  for (const c of changes.filter((x) => x.type === "move_exercise")) {
+    const [moved] = s.exercises.splice(c.exerciseIndex, 1);
+    if (moved) s.exercises.splice(Math.max(0, Math.min(c.toPosition, s.exercises.length)), 0, moved);
+  }
+  s.exercises = s.exercises.map((e, i) => ({ ...e, i }));
+  const firstOpen = s.exercises.findIndex((e) => !isDone(e));
+  s.cur = firstOpen >= 0 ? firstOpen : 0;
+  return s;
+}

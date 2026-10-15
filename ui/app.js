@@ -1,7 +1,8 @@
 // IronLog v3 entry point.
 import { state, boot, subscribe, retryPending } from "./store.js";
 import { renderTrain } from "./train.js";
-import { renderHistory, renderProgress, renderCoach } from "./tabs.js";
+import { renderHistory, renderProgress } from "./tabs.js";
+import { renderCoach } from "./coach.js";
 import { setHaptics, toast } from "./dom.js";
 
 const view = document.getElementById("view");
@@ -9,6 +10,7 @@ let tab = "train";
 const renderers = { train: renderTrain, history: renderHistory, progress: renderProgress, coach: renderCoach };
 
 function render() {
+  document.body.dataset.tab = tab; // the rest dock only shows on Train
   if (!state.index) return;
   setHaptics(state.settings.haptics);
   renderers[tab](view);
