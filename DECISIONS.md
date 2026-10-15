@@ -1,6 +1,9 @@
 # Decisions log
 Choices made where the specs were ambiguous. Newest first.
 
+## Phase 1 follow-up — 2026-10-15
+- **Backend lockdown removed at Ateeq's request.** Actions stay open as in v2 (only program backup checks the key). The v3 tables (`doPost`) are also open. Deploying the backend is now a plain paste-and-redeploy with no key reset. Revisit if the app is ever shared.
+
 ## Phase 1 — 2026-10-15
 - **A typed name never auto-matches by similarity.** Resolution is exact id → exact name/alias (after normalization) → suggestions. The spec's "similarity ≥ 0.9" step is a *strong suggestion* the UI can preselect, not a silent match — a wrong silent match corrupts a strength model, a confirmation tap costs a second.
 - **Normalization handles the variants in your log** (DB/dumbbell, tricep/triceps, pressdown/pushdown, plurals, word order), so "Leg Curl (Lying)" and "Lying Leg Curl" are the same exercise without any fuzzy matching.

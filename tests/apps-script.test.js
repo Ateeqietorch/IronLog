@@ -5,25 +5,14 @@ import { loadBackend } from "./helpers/fakeAppsScript.js";
 const LOG = [["Date", "Day", "Exercise", "Set", "Weight", "Reps", "Notes", "SessionKey", "", ""],
   ["2026-09-15", "Push A", "Hack Squat", 1, 270, 10, "", "2026-09-15_Push A", 8, 1]];
 
-test("every GET action is rejected without the device key", () => {
+test("GET actions stay open, as in v2 (only program backup checks the key)", () => {
   const b = loadBackend({ sheets: { Sheet1: LOG }, props: { PROGRAM_AUTH_TOKEN: "k1" } });
-  for (const action of ["read", "clear", "write", "read_bodyweight", "ai_review", "ai_reconsider", "save_program"]) {
-    assert.deepEqual(b.get({ action }), { ok: false, msg: "unauthorized" }, action);
-    assert.deepEqual(b.get({ action, token: "wrong" }), { ok: false, msg: "unauthorized" }, action);
-  }
-  assert.equal(b.sheet("Sheet1").rows.length, 2, "nothing was cleared");
-});
-
-test("GET works with the right key, and the first key ever sent is adopted", () => {
-  const b = loadBackend({ sheets: { Sheet1: LOG } });
-  assert.equal(b.get({ action: "read", token: "first" }).ok, true);
-  assert.equal(b.props.PROGRAM_AUTH_TOKEN, "first");
-  assert.equal(b.get({ action: "read", token: "second" }).ok, false);
+  assert.equal(b.get({ action: "read" }).ok, true);
+  assert.deepEqual(b.get({ action: "save_program", token: "wrong" }), { ok: false, msg: "unauthorized" });
 });
 
 test("POST tables: upsert, update in place, list, delete", () => {
   const b = loadBackend({ props: { PROGRAM_AUTH_TOKEN: "k" } });
-  assert.equal(b.post({ action: "table_list", table: "Exercises" }).ok, false, "no token");
   let r = b.post({ action: "table_upsert", token: "k", table: "Exercises",
     records: [{ key: "pendulum-squat", value: { id: "pendulum-squat", name: "Pendulum squat" } },
               { key: "belt-squat", value: { id: "belt-squat" } },

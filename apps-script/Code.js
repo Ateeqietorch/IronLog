@@ -24,10 +24,6 @@ function doGet(e) {
     const ss     = SpreadsheetApp.getActiveSpreadsheet();
     const action = e.parameter.action;
 
-    // Every action requires the device key (v3 Phase 1). Before this, only
-    // program backup was gated, so anyone who found this URL in the public
-    // repo could read or wipe the log and spend the Anthropic key.
-    if (!checkAuthToken(e.parameter.token)) return respond({ ok: false, msg: "unauthorized" });
 
     // ── Sessions ──────────────────────────────────────────────────────────────
     if (action === "read") {
@@ -469,7 +465,6 @@ function doPost(e) {
     let body = {};
     try { body = JSON.parse((e.postData && e.postData.contents) || "{}"); }
     catch (err) { return respond({ ok: false, msg: "bad json" }); }
-    if (!checkAuthToken(body.token)) return respond({ ok: false, msg: "unauthorized" });
 
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const action = body.action;
