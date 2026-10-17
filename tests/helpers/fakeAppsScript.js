@@ -7,11 +7,14 @@ class FakeSheet {
   constructor(name, rows = []) { this.name = name; this.rows = rows.map((r) => [...r]); }
   getDataRange() { const rows = this.rows; return { getValues: () => (rows.length ? rows.map((r) => [...r]) : [[]]) }; }
   getLastRow() { return this.rows.length; }
+  getMaxColumns() { return this.maxCols ?? Math.max(10, ...this.rows.map((r) => r.length)); }
+  insertColumnsAfter(after, n) { this.maxCols = this.getMaxColumns() + n; this.insertedCols = (this.insertedCols ?? 0) + n; }
   appendRow(r) { this.rows.push([...r]); }
   deleteRow(n) { this.rows.splice(n - 1, 1); }
   deleteRows(start, count) { this.rows.splice(start - 1, count); }
   getRange(row, col, nRows, nCols) {
     if (row < 1) throw new Error(`bad row ${row}`);
+    if (col - 1 + nCols > this.getMaxColumns()) throw new Error(`range past last column (${col - 1 + nCols} > ${this.getMaxColumns()})`);
     return {
       setValues: (vals) => {
         vals.forEach((v, i) => {
@@ -28,6 +31,7 @@ export function loadBackend({ sheets = {}, props = {}, fetchReplies = [] } = {})
   const fetched = [];
   const book = new Map(Object.entries(sheets).map(([n, rows]) => [n, new FakeSheet(n, rows)]));
   const store = { ...props };
+  const cache = new Map();
   const ctx = {
     console, JSON, Date, Math, Object, Array, String, Number, parseInt, parseFloat, isNaN, Error,
     SpreadsheetApp: { getActiveSpreadsheet: () => ({
@@ -38,6 +42,7 @@ export function loadBackend({ sheets = {}, props = {}, fetchReplies = [] } = {})
       getProperty: (k) => store[k] ?? null,
       setProperty: (k, v) => { store[k] = v; },
     }) },
+    CacheService: { getScriptCache: () => ({ get: (k) => cache.get(k) ?? null, put: (k, v) => { cache.set(k, v); } }) },
     LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
     ContentService: {
       MimeType: { JSON: "json" },

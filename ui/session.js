@@ -48,9 +48,9 @@ export function planExercise({ slot, ex, models, date, weekInfo, bodyweight, pol
 export function buildSession({ day, index, models, date, weekInfo, bodyweight = null, policy = "balanced", gymProfile = null }) {
   const exercises = day.exercises.map((slot, i) => {
     const ex = slot.exerciseId ? index.byId.get(slot.exerciseId) : null;
-    if (!ex) return { i, slot, name: slot.name, ex: null, mode: "manual", plan: null, logged: [], sets: slot.sets, note: "This exercise isn't in the catalog yet, so it's logged without coaching." };
+    if (!ex) return { i, slotIndex: i, slot, name: slot.name, ex: null, mode: "manual", plan: null, logged: [], sets: slot.sets, note: "This exercise isn't in the catalog yet, so it's logged without coaching." };
     const p = planExercise({ slot, ex, models, date, weekInfo, bodyweight, policy, gymProfile });
-    return { i, slot, name: slot.name, ex, ...p, logged: [], sets: p.plan?.sets.length ?? slot.sets };
+    return { i, slotIndex: i, slot, name: slot.name, ex, ...p, logged: [], sets: p.plan?.sets.length ?? slot.sets };
   });
   return {
     date, dayKey: day.key, dayLabel: day.label, sessionKey: `${date}_${day.key}`,
@@ -153,7 +153,7 @@ export { loadFor };
 export function describeChange(s, c, index) {
   const name = (i) => s.exercises[i]?.ex?.name ?? s.exercises[i]?.name ?? `exercise ${i + 1}`;
   switch (c.type) {
-    case "switch_exercise": return `Swap ${name(c.exerciseIndex)} for ${index.byId.get(c.toExerciseId)?.name ?? c.toExerciseId} (today only)`;
+    case "switch_exercise": return `Swap ${name(c.exerciseIndex)} for ${index.byId.get(c.toExerciseId)?.name ?? c.toExerciseId} (today only${s.exercises[c.exerciseIndex]?.logged?.length ? ", for the sets you have left" : ""})`;
     case "skip_exercise": return `Skip ${name(c.exerciseIndex)}`;
     case "set_count": return `${name(c.exerciseIndex)}: ${c.sets} sets`;
     case "move_exercise": return `Move ${name(c.exerciseIndex)} to position ${c.toPosition + 1}`;
@@ -168,7 +168,6 @@ export function validateChange(s, c, index, program) {
   if (!e) return "That exercise isn't in today's workout.";
   if (c.type === "switch_exercise") {
     if (!index.byId.has(c.toExerciseId)) return "That exercise isn't in the catalog.";
-    if (e.logged.length) return `You've already logged sets of ${e.ex?.name ?? e.name}.`;
   }
   if (c.type === "set_count" && !(c.sets >= 1)) return "Invalid set count.";
   return null;
@@ -187,11 +186,19 @@ export function applyChanges(session, changes, { index, models }) {
   const ordered = [...changes].sort((a, b) => (a.type === "skip_exercise") - (b.type === "skip_exercise") || (b.exerciseIndex ?? 0) - (a.exerciseIndex ?? 0));
   for (const c of ordered) {
     const e = s.exercises[c.exerciseIndex];
-    if (c.type === "switch_exercise" && e && !e.logged.length) {
+    if (c.type === "switch_exercise" && e) {
       const ex = index.byId.get(c.toExerciseId);
       if (!ex) continue;
-      const slot = { ...e.slot, name: ex.name, exerciseId: ex.id, repRange: ex.defaultRepRange, unilateral: ex.unilateral, programWeight: null };
-      s.exercises[c.exerciseIndex] = { ...replan(e, slot), logged: [], switchedFrom: e.ex?.name ?? e.name };
+      // Sets already done stay with the old exercise; the new one gets the rest.
+      const split = e.logged.length > 0;
+      const { trial: _old, ...base } = e.slot;
+      const slot = {
+        ...base, name: ex.name, exerciseId: ex.id, repRange: ex.defaultRepRange, unilateral: !!ex.unilateral, programWeight: null,
+        sets: split ? Math.max(1, e.sets - e.logged.length) : e.slot.sets, ...(c.trial ? { trial: c.trial } : {}),
+      };
+      const fresh = { ...replan(e, slot), logged: [], switchedFrom: e.ex?.name ?? e.name };
+      if (split) { e.sets = e.logged.length; s.exercises.splice(c.exerciseIndex + 1, 0, fresh); }
+      else s.exercises[c.exerciseIndex] = fresh;
     } else if (c.type === "set_count" && e) {
       const n = Math.max(c.sets, e.logged.length);
       if (!e.ex) { e.sets = n; continue; }

@@ -164,3 +164,32 @@ input { font: inherit; color: inherit; }
 .composer [disabled] { opacity: .5; }
 body:not([data-tab="train"]) .rest { display: none; }
 body:not([data-tab="train"]) .app.resting { padding-bottom: calc(68px + env(safe-area-inset-bottom)); }
+
+/* Switch, trials, coach formatting */
+.card-links { display: flex; justify-content: space-between; align-items: center; margin-top: 4px; }
+.card-links .link { margin: 0; display: inline-flex; align-items: center; gap: 6px; min-height: var(--tap); font-size: 14px; color: var(--silver-2); }
+.card-links .link .ti { font-size: 16px; color: var(--steel); }
+#switch-btn { color: var(--silver); }
+#switch-btn .ti { color: var(--red); }
+.trial-pill { display: inline-flex; align-items: center; gap: 4px; margin-left: 8px; vertical-align: 2px; }
+.search { width: 100%; height: 44px; border-radius: var(--r-button); border: 1px solid var(--seam); background: var(--iron); color: var(--silver); padding: 0 12px; font: inherit; font-size: 16px; }
+.alt > span:first-child { display: flex; flex-direction: column; min-width: 0; }
+.alt-name { font-size: 15px; }
+.alt-sub { font-size: 12px; color: var(--steel); text-transform: capitalize; }
+.tag { font-size: 11px; padding: 3px 7px; border-radius: 6px; border: 1px solid var(--seam); color: var(--steel); white-space: nowrap; flex: none; }
+.tag.ok { color: var(--done); border-color: #2f4a34; }
+.mode { display: flex; align-items: flex-start; gap: 12px; width: 100%; text-align: left; padding: 12px; margin-top: 8px; border: 1px solid var(--seam); border-radius: var(--r-button); background: var(--iron); min-height: var(--tap); }
+.mode > button { display: flex; align-items: flex-start; gap: 12px; flex: 1; text-align: left; min-height: var(--tap); }
+.mode .ti { font-size: 20px; color: var(--red); margin-top: 1px; }
+.mode b { display: block; font-weight: 500; font-size: 15px; }
+.mode .desc { display: block; font-size: 13px; color: var(--steel); margin-top: 2px; }
+.mode.trial { padding-right: 8px; }
+.tn-ctl { display: flex; gap: 6px; align-self: center; }
+.tn-ctl button { width: 40px; height: 40px; border-radius: 20px; border: 1px solid var(--seam); display: grid; place-items: center; }
+.review { border-color: var(--red-dim); }
+.review-txt { font-size: 14px; color: var(--silver-2); line-height: 1.5; margin: 8px 0 10px; }
+.msg.coach p { margin: 0 0 8px; }
+.msg.coach p:last-child { margin-bottom: 0; }
+.msg.coach ul, .msg.coach ol { margin: 0 0 8px 20px; }
+.msg.coach li { margin: 2px 0; }
+.msg.coach b { color: #fff; font-weight: 600; }

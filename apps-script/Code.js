@@ -555,9 +555,14 @@ function runCoach(ss, body) {
     if (res.code === 404 && model !== CLAUDE_MODEL) { model = CLAUDE_MODEL; res = callClaudeRaw({ model, max_tokens: 1200, system: coachSystem(body.context || {}, memory), tools: COACH_TOOLS, messages }); }
     if (res.code !== 200) throw new Error("Claude API error " + res.code + ": " + (res.body.error ? res.body.error.message : "unknown"));
     const content = res.body.content || [];
-    reply += content.filter(b => b.type === "text").map(b => b.text).join("\n");
+    const text = content.filter(b => b.type === "text").map(b => b.text).join("\n").trim();
+    reply += text;
     const uses = content.filter(b => b.type === "tool_use");
     if (res.body.stop_reason !== "tool_use" || !uses.length) break;
+    // The tools only record things, so when the coach has already said
+    // something there's nothing to wait for: run them and answer now
+    // (one API call instead of two keeps the phone from timing out).
+    const finalNow = !!text;
     messages.push({ role: "assistant", content });
     const results = uses.map(u => {
       let out = "ok";
@@ -573,10 +578,13 @@ function runCoach(ss, body) {
       }
       return { type: "tool_result", tool_use_id: u.id, content: out };
     });
+    if (finalNow) break;
     messages.push({ role: "user", content: results });
     reply = reply ? reply + "\n" : "";
   }
-  return { reply: reply.trim(), proposals, remembered, model };
+  reply = reply.trim();
+  if (!reply) reply = proposals.length ? "Here's what I'd change:" : remembered.length ? "Noted." : "Sorry, I didn't get an answer back. Try asking again.";
+  return { reply, proposals, remembered, model };
 }
 
 function doPost(e) {
@@ -590,7 +598,62 @@ function doPost(e) {
 
     if (action === "ping") return respond({ ok: true, msg: "pong" });
 
-    if (action === "coach") return respond(Object.assign({ ok: true }, runCoach(ss, body)));
+    if (action === "coach") {
+      const out = Object.assign({ ok: true }, runCoach(ss, body));
+      // Phones drop long requests (iOS gives up after about a minute), so the
+      // answer is also parked for the app to collect with coach_result.
+      if (body.requestId) { try { CacheService.getScriptCache().put("coach:" + body.requestId, JSON.stringify(out), 3600); } catch (err) {} }
+      return respond(out);
+    }
+
+    if (action === "coach_result") {
+      const hit = CacheService.getScriptCache().get("coach:" + String(body.requestId || ""));
+      return respond(hit ? JSON.parse(hit) : { ok: true, pending: true });
+    }
+
+    // Save one workout atomically: under a lock, drop every row with this
+    // session key, then write the new rows in one go. Running it twice gives
+    // the same result, so retries can't duplicate sets.
+    if (action === "replace_session") {
+      const key = String(body.sessionKey || "");
+      const rows = body.rows || [];
+      if (!key || !Array.isArray(rows) || rows.length > 300) return respond({ ok: false, msg: "need sessionKey and at most 300 rows" });
+      if (rows.some(r => String(r[7]) !== key)) return respond({ ok: false, msg: "every row must carry the session key" });
+      const lock = LockService.getScriptLock();
+      lock.waitLock(30000);
+      try {
+        const sheet = ss.getSheetByName(SESSIONS_SHEET);
+        const removed = deleteRowsWhere(sheet, r => String(r[7]) === key);
+        if (rows.length) {
+          const width = Math.max.apply(null, rows.map(r => r.length));
+          if (sheet.getMaxColumns() < width) sheet.insertColumnsAfter(sheet.getMaxColumns(), width - sheet.getMaxColumns());
+          const padded = rows.map(r => { const x = r.slice(); while (x.length < width) x.push(""); return x; });
+          sheet.getRange(sheet.getLastRow() + 1, 1, padded.length, width).setValues(padded);
+        }
+        return respond({ ok: true, removed, written: rows.length });
+      } finally { lock.releaseLock(); }
+    }
+
+    // One-off repair: remove repeated sets (same session, exercise and set
+    // number), keeping the last copy of each.
+    if (action === "dedupe_log") {
+      const lock = LockService.getScriptLock();
+      lock.waitLock(30000);
+      try {
+        const sheet = ss.getSheetByName(SESSIONS_SHEET);
+        const data = sheet.getDataRange().getValues();
+        const seen = {};
+        const drop = {};
+        for (let i = data.length - 1; i >= 1; i--) {
+          const r = data[i];
+          if (!r[7] || !r[2]) continue;
+          const k = [r[7], r[2], r[3]].join("|");
+          if (seen[k]) drop[i] = true; else seen[k] = true;
+        }
+        const removed = deleteRowsWhere(sheet, (r, i) => drop[i]);
+        return respond({ ok: true, removed });
+      } finally { lock.releaseLock(); }
+    }
 
     if (action === "table_list" || action === "table_upsert" || action === "table_delete") {
       const headers = V3_TABLES[body.table];
@@ -673,6 +736,22 @@ function clearByKey(sheet, keyValue, colIndex) {
   for (let i = data.length - 1; i >= 1; i--) {
     if (String(data[i][colIndex]) === String(keyValue)) sheet.deleteRow(i + 1);
   }
+}
+
+// Delete matching data rows (never the header), bottom-up, in contiguous runs.
+function deleteRowsWhere(sheet, pred) {
+  const data = sheet.getDataRange().getValues();
+  let removed = 0;
+  let i = data.length - 1;
+  while (i >= 1) {
+    if (!pred(data[i], i)) { i--; continue; }
+    let start = i;
+    while (start - 1 >= 1 && pred(data[start - 1], start - 1)) start--;
+    sheet.deleteRows(start + 1, i - start + 1);
+    removed += i - start + 1;
+    i = start - 1;
+  }
+  return removed;
 }
 
 function cleanDate(raw) {

@@ -7,6 +7,7 @@ import { describeChange, validateChange, isDone } from "./session.js";
 import { e1rm } from "../engine/model.js";
 import { post } from "../data/sheets.js";
 import { esc, toast } from "./dom.js";
+import { md } from "./md.js";
 
 const KEY = "il3:coach";
 let thread = ls.get(KEY, []);
@@ -37,12 +38,12 @@ export function buildContext() {
     if (!bySession.has(k)) bySession.set(k, { date: r.date, day: r.day, sets: [] });
     bySession.get(k).sets.push(`${r.exercise} ${r.weight}x${r.reps}${r.rpe ? "@RPE" + r.rpe : ""}`);
   }
-  const recent = [...bySession.values()].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 6)
-    .map((x) => ({ date: x.date, day: x.day, sets: x.sets.slice(0, 30) }));
+  const recent = [...bySession.values()].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 4)
+    .map((x) => ({ date: x.date, day: x.day, sets: x.sets.slice(0, 24) }));
 
   const strength = Object.entries(state.models).filter(([, m]) => m.logE1rm != null)
     .map(([k, m]) => ({ id: k.split("|")[0], side: k.split("|")[1], e1rm: Math.round(e1rm(m)), last: m.lastExposure, sessions: m.exposures }))
-    .sort((a, b) => String(b.last).localeCompare(String(a.last))).slice(0, 40);
+    .sort((a, b) => String(b.last).localeCompare(String(a.last))).slice(0, 30);
 
   // Catalog the coach may switch to: same patterns as today first, then the rest.
   const todayPatterns = new Set(today?.exercises.map((e) => e.pattern).filter(Boolean));
@@ -71,7 +72,7 @@ export function renderCoach(root) {
   const msgs = thread.map((m, i) => {
     if (m.role === "user") return `<div class="msg me">${esc(m.content)}</div>`;
     const cards = (m.proposals ?? []).map((p, j) => proposalCard(p, i, j)).join("");
-    return `<div class="msg coach">${esc(m.content).replace(/\n/g, "<br>")}</div>${cards}`;
+    return `<div class="msg coach">${md(m.content)}</div>${cards}`;
   }).join("");
   root.innerHTML = `
     <header class="p-head"><h1>Coach</h1>${thread.length ? `<button class="icon-btn" id="coach-clear" aria-label="Start a new conversation"><i class="ti ti-refresh" aria-hidden="true"></i></button>` : ""}</header>
@@ -114,17 +115,47 @@ function proposalCard(p, i, j) {
   return `<div class="proposal"><div style="font-weight:500">${esc(p.summary)}</div><ul>${lines}</ul>${status}</div>`;
 }
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Phones drop requests that take more than about a minute ("Load failed"),
+// but the backend finishes anyway and parks the answer. So on a network
+// error, ask for the parked answer for up to two more minutes.
+async function askCoach(payload) {
+  const requestId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  try {
+    return await post("coach", { ...payload, requestId });
+  } catch (err) {
+    if (!(err instanceof TypeError)) throw err; // a real answer from the backend, e.g. an API error
+    for (let i = 0; i < 24; i++) {
+      await sleep(5000);
+      try {
+        const d = await post("coach_result", { requestId });
+        if (!d.pending) return d;
+      } catch (e) {
+        if (/unknown action/.test(String(e.message))) throw err;
+      }
+    }
+    throw new Error("The coach took too long to answer");
+  }
+}
+
 async function send(root, text) {
   const t = String(text ?? "").trim();
   if (!t || busy) return;
   thread.push({ role: "user", content: t });
   busy = true; save(); renderCoach(root);
   try {
-    const messages = thread.map((m) => ({ role: m.role, content: m.content }));
-    const d = await post("coach", { messages, context: buildContext() });
-    thread.push({ role: "assistant", content: d.reply || "Done.", proposals: (d.proposals ?? []).map((p) => ({ ...p, status: null })) });
+    // Only the recent conversation goes up; old turns just slow it down.
+    const messages = thread.slice(-12).map((m) => ({ role: m.role, content: m.content }));
+    while (messages.length && messages[0].role !== "user") messages.shift();
+    const d = await askCoach({ messages, context: buildContext() });
+    const proposals = (d.proposals ?? []).map((p) => ({ ...p, status: null }));
+    thread.push({ role: "assistant", content: d.reply || (proposals.length ? "Here's what I'd change:" : "Noted."), proposals });
   } catch (err) {
-    thread.push({ role: "assistant", content: /unknown action/.test(String(err.message)) ? "The coach needs the latest backend. Paste the new Code.js into Apps Script and redeploy (Deploy → Manage deployments → pencil → New version)." : `Couldn't reach the coach: ${err.message}. Check your connection and try again.` });
+    const m = String(err.message);
+    thread.push({ role: "assistant", content: /unknown action/.test(m) ? "The coach needs the latest backend. Paste the new Code.js into Apps Script and redeploy (Deploy → Manage deployments → pencil → New version)."
+      : /ANTHROPIC_API_KEY/.test(m) ? "The coach isn't set up yet: add ANTHROPIC_API_KEY under Project Settings → Script Properties in Apps Script."
+      : `Couldn't reach the coach (${m}). Try again in a moment.` });
   }
   busy = false; save();
   if (document.getElementById("composer")) renderCoach(root);

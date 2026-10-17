@@ -125,9 +125,16 @@ test("coach proposals: switch, set count, skip and move apply to today only", ()
   assert.equal(moved.exercises[0].ex.id, "pec-deck");
 });
 
-test("coach proposals can't switch an exercise you've already logged or invent ids", () => {
+test("switching after some sets keeps those sets and moves the rest to the new exercise", () => {
   let s = buildSession({ day, index, models: {}, date: "2026-09-29", weekInfo: week });
   s = logSet(s, 1, { load: 140, reps: 10, rir: 2 });
-  assert.match(validateChange(s, { type: "switch_exercise", exerciseIndex: 1, toExerciseId: "pec-deck" }, index, { days: [] }), /already logged/);
+  assert.equal(validateChange(s, { type: "switch_exercise", exerciseIndex: 1, toExerciseId: "pec-deck" }, index, { days: [] }), null);
   assert.match(validateChange(s, { type: "switch_exercise", exerciseIndex: 0, toExerciseId: "made-up" }, index, { days: [] }), /catalog/);
+  const t = applyChanges(s, [{ type: "switch_exercise", exerciseIndex: 1, toExerciseId: "pec-deck" }], { index, models: {} });
+  assert.deepEqual(t.exercises.map((e) => e.ex?.id ?? e.name), ["incline-dumbbell-press", "machine-chest-press", "pec-deck", "Mystery Thing"]);
+  assert.equal(t.exercises[1].sets, 1, "old exercise is done with the set you logged");
+  assert.equal(t.exercises[1].logged.length, 1);
+  assert.equal(t.exercises[2].sets, 1, "one set left goes to the pec deck");
+  assert.equal(t.exercises[2].slotIndex, 1);
+  assert.equal(toRows(t).length, 1);
 });

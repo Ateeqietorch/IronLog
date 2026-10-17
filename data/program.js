@@ -71,3 +71,32 @@ export function nextDay(program, rows) {
   const i = keys.indexOf(String(recent.day).replace(/ \(Override\)$/, ""));
   return program.days[(i + 1) % keys.length];
 }
+
+// Make a switch permanent: rewrite one slot of the program in the v2 storage
+// format (so the classic view sees it too). Returns the new storage object;
+// the caller saves it and reloads the program.
+export function replaceSlot(program, storage, dayKey, slotIndex, to) {
+  const exercises = storage?.exercises && Object.keys(storage.exercises).length
+    ? structuredClone(storage.exercises)
+    : Object.fromEntries(program.days.map((d) => [d.key, d.exercises.map((e) => ({
+      name: e.name, sets: e.sets, repMin: e.repRange[0], repMax: e.repRange[1], weight: e.programWeight ?? "",
+    }))]));
+  const dayLabels = { ...(storage?.dayLabels ?? {}) };
+  if (!(storage?.exercises && Object.keys(storage.exercises).length)) for (const d of program.days) dayLabels[d.key] = d.label;
+  const list = exercises[dayKey];
+  if (!list?.[slotIndex]) return null;
+  const old = list[slotIndex];
+  list[slotIndex] = { ...old, name: to.name, repMin: to.defaultRepRange[0], repMax: to.defaultRepRange[1], weight: "", ...(to.unilateral ? { unilateral: true } : { unilateral: false }) };
+  return { exercises, dayLabels };
+}
+
+export function saveProgramStorage(storage) {
+  try {
+    localStorage.setItem("il:exercises", JSON.stringify(storage.exercises));
+    localStorage.setItem("il:dayLabels", JSON.stringify(storage.dayLabels ?? {}));
+  } catch { /* storage blocked */ }
+}
+
+export function readProgramStorage() {
+  return { exercises: readLocal("il:exercises", null), dayLabels: readLocal("il:dayLabels", {}) };
+}

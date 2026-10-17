@@ -1,5 +1,7 @@
 // Train screen (DESIGN-SPEC.md §5.1–5.5).
-import { state, setSession, startDay, finishSession, hasPending, undo } from "./store.js";
+import { state, setSession, startDay, finishSession, hasPending, undo, isSaving, reviewTrial } from "./store.js";
+import { switchSheet } from "./switch.js";
+import { inReview, trialSummary } from "../data/trials.js";
 import { logSet, target, isDone, sessionDone, anyLogged, stepLoad } from "./session.js";
 import { nextDay } from "../data/program.js";
 import { statusLine } from "../engine/meso.js";
@@ -57,6 +59,7 @@ export function renderTrain(root) {
     </header>
     <div class="strip" aria-hidden="true">${strip}</div>
     ${state.offline ? `<div class="notice warn">Couldn't reach your sheet. Today's sets are saved on this phone and will sync.</div>` : ""}
+    ${reviewCards()}
     ${e ? nowCard(s, e) : ""}
     ${upNext(s)}
     ${finishBlock(s)}
@@ -93,8 +96,8 @@ function nowCard(s, e) {
   <section class="card" aria-label="Current exercise">
     <div class="card-top">
       <div>
-        <div class="ex-name">${esc(e.ex?.name ?? e.name)}${e.mode === "calibrating" && e.logged.length === 0 ? `<span class="pill">Calibrating</span>` : ""}</div>
-        <div class="ex-sub">Exercise ${s.cur + 1} of ${s.exercises.length} · ${done ? "all sets done" : `set ${si + 1} of ${e.sets}`}${e.switchedFrom ? ` · instead of ${esc(e.switchedFrom)}` : ""}</div>
+        <div class="ex-name">${esc(e.ex?.name ?? e.name)}${e.slot.trial ? `<span class="pill trial-pill"><i class="ti ti-flask" aria-hidden="true"></i>${e.slot.trial.n}/${e.slot.trial.of}</span>` : e.mode === "calibrating" && e.logged.length === 0 ? `<span class="pill">Calibrating</span>` : ""}</div>
+        <div class="ex-sub">Exercise ${s.cur + 1} of ${s.exercises.length} · ${done ? "all sets done" : `set ${si + 1} of ${e.sets}`}${e.switchedFrom ? ` · instead of ${esc(e.switchedFrom)}` : e.slot.trial ? ` · instead of ${esc(e.slot.trial.fromName)}` : ""}</div>
       </div>
       <div class="ex-nav">
         <button class="icon-btn" id="prev-ex" aria-label="Previous exercise" ${s.cur === 0 ? "disabled" : ""}><i class="ti ti-chevron-left" aria-hidden="true"></i></button>
@@ -112,7 +115,10 @@ function nowCard(s, e) {
     <div class="label">Reps left in the tank</div>
     <div class="chips" role="group" aria-label="Reps left in the tank">${chips}</div>
     <button class="primary" id="log-btn"><i class="ti ti-check" aria-hidden="true"></i>${btnLabel}</button>
-    ${manualFirst ? "" : `<button class="link" id="edit-btn">Different numbers? Edit set</button>`}`}
+    <div class="card-links">
+      ${manualFirst ? "<span></span>" : `<button class="link" id="edit-btn"><i class="ti ti-pencil" aria-hidden="true"></i>Edit set</button>`}
+      <button class="link" id="switch-btn"><i class="ti ti-arrows-exchange" aria-hidden="true"></i>Switch exercise</button>
+    </div>`}
   </section>`;
 }
 
@@ -126,7 +132,26 @@ function upNext(s) {
   return items ? `<section class="next"><h2>Up next</h2>${items}</section>` : "";
 }
 
+function reviewCards() {
+  return inReview(state.trials).map((t) => {
+    const r = trialSummary(t, state.models);
+    const trend = r.changePct == null ? "" : r.changePct > 0.5 ? `Your strength on it went <b>up ${r.changePct}%</b> over the trial.` : r.changePct < -0.5 ? `Your strength on it went <b>down ${Math.abs(r.changePct)}%</b> over the trial.` : "Your strength on it held steady over the trial.";
+    const per = r.per.map((p) => `<span>${esc(p.top)}</span>`).join(" · ");
+    return `<section class="card review" aria-label="Trial review">
+      <div class="label" style="margin-top:0"><i class="ti ti-flask" aria-hidden="true"></i> Trial finished · ${esc(state.program.days.find((d) => d.key === t.dayKey)?.label ?? t.dayKey)}</div>
+      <div class="ex-name">${esc(t.toName)} <span class="mut" style="font-size:15px">instead of ${esc(t.fromName)}</span></div>
+      <p class="review-txt">${r.sessions} sessions done${per ? `, first sets: ${per}` : ""}. ${trend} Keep it if it felt good on the target muscle and your joints; go back if not.</p>
+      <div class="prop-acts">
+        <button class="primary" data-review="keep" data-id="${esc(t.id)}" style="height:44px;font-size:19px;margin:0">Keep it</button>
+        <button class="secondary" data-review="revert" data-id="${esc(t.id)}" style="height:44px">Go back</button>
+      </div>
+      <button class="link" data-review="extend" data-id="${esc(t.id)}">Not sure yet, 2 more sessions</button>
+    </section>`;
+  }).join("");
+}
+
 function finishBlock(s) {
+  if (isSaving()) return `<div class="finish"><button class="primary" disabled><i class="ti ti-loader" aria-hidden="true"></i>Saving…</button></div>`;
   if (sessionDone(s)) return `<div class="finish"><button class="primary" id="finish-btn"><i class="ti ti-flag" aria-hidden="true"></i>Finish workout</button></div>`;
   if (anyLogged(s)) return `<div class="finish"><button class="secondary" id="finish-btn">Finish early and save</button></div>`;
   return "";
@@ -136,13 +161,23 @@ function renderSaved(root, s) {
   const next = nextDay(state.program, state.rows);
   const sets = s.exercises.reduce((a, e) => a + e.logged.length, 0);
   root.innerHTML = `
-    <header class="t-head"><div><div class="t-status">${esc(s.dayLabel)} · ${sets} sets</div><div class="t-day">${state.sync === "pending" ? "Saved on phone" : "Workout saved"}</div></div>${syncChip()}</header>
-    <div class="empty">${state.sync === "pending" ? "Your sheet couldn't be reached, so this workout is saved on this phone and will sync next time IronLog opens online." : "Every set is in your sheet, and your strength estimates are updated."}
+    <header class="t-head"><div><div class="t-status">${esc(s.dayLabel)} · ${sets} sets</div><div class="t-day">${state.sync === "saving" ? "Saving…" : state.sync === "pending" ? "Saved on phone" : "Workout saved"}</div></div>${syncChip()}</header>
+    ${reviewCards()}
+    <div class="empty">${state.sync === "saving" ? "Sending your sets to your sheet. You can close the app; it finishes next time if it doesn't get through." : state.sync === "pending" ? "Your sheet couldn't be reached, so this workout is saved on this phone and will sync next time IronLog opens online." : "Every set is in your sheet, and your strength estimates are updated."}
       <button class="primary" id="start-next"><i class="ti ti-player-play" aria-hidden="true"></i>Start ${esc(next.label)}</button>
       <button class="link" id="pick-day">Pick a different day</button>
     </div>`;
   root.querySelector("#start-next").onclick = () => { startDay(next.key); setSession(state.session); };
   root.querySelector("#pick-day").onclick = dayPicker;
+  bindReviews(root);
+}
+
+function bindReviews(root) {
+  root.querySelectorAll("[data-review]").forEach((b) => b.addEventListener("click", () => {
+    const d = b.dataset.review;
+    reviewTrial(b.dataset.id, d);
+    toast(d === "keep" ? "Kept, it's in your program now" : d === "revert" ? "Back to the original from next time" : "Two more sessions");
+  }));
 }
 
 function bind(root, s) {
@@ -159,13 +194,16 @@ function bind(root, s) {
   root.querySelector("#prev-ex")?.addEventListener("click", () => s.cur > 0 && setSession({ ...s, cur: s.cur - 1 }));
   root.querySelector("#next-ex")?.addEventListener("click", () => s.cur < s.exercises.length - 1 && setSession({ ...s, cur: s.cur + 1 }));
   root.querySelector("#edit-btn")?.addEventListener("click", () => editSheet(null));
+  root.querySelector("#switch-btn")?.addEventListener("click", () => switchSheet(s.cur));
+  bindReviews(root);
   root.querySelector("#log-btn")?.addEventListener("click", () => {
     const e = s.exercises[s.cur];
     if (!e.plan && e.logged.length === 0) return editSheet(null);
     const t = target(e);
     commit(s.cur, { load: t.load, reps: e.ex?.unilateral ? { L: t.reps, R: t.reps } : t.reps, rir: chosenRir });
   });
-  root.querySelector("#finish-btn")?.addEventListener("click", async () => {
+  root.querySelector("#finish-btn")?.addEventListener("click", async (ev) => {
+    ev.currentTarget.disabled = true;
     const r = await finishSession();
     if (!r.ok) toast(r.msg);
   });
