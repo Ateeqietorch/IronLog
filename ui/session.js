@@ -48,9 +48,10 @@ export function planExercise({ slot, ex, models, date, weekInfo, bodyweight, pol
 export function buildSession({ day, index, models, date, weekInfo, bodyweight = null, policy = "balanced", gymProfile = null }) {
   const exercises = day.exercises.map((slot, i) => {
     const ex = slot.exerciseId ? index.byId.get(slot.exerciseId) : null;
-    if (!ex) return { i, slotIndex: i, slot, name: slot.name, ex: null, mode: "manual", plan: null, logged: [], sets: slot.sets, note: "This exercise isn't in the catalog yet, so it's logged without coaching." };
+    const slotIndex = slot.origIndex ?? i;
+    if (!ex) return { i, slotIndex, slot, name: slot.name, ex: null, mode: "manual", plan: null, logged: [], sets: slot.sets, note: "This exercise isn't in the catalog yet, so it's logged without coaching." };
     const p = planExercise({ slot, ex, models, date, weekInfo, bodyweight, policy, gymProfile });
-    return { i, slotIndex: i, slot, name: slot.name, ex, ...p, logged: [], sets: p.plan?.sets.length ?? slot.sets };
+    return { i, slotIndex, slot, name: slot.name, ex, ...p, logged: [], sets: p.plan?.sets.length ?? slot.sets };
   });
   return {
     date, dayKey: day.key, dayLabel: day.label, sessionKey: `${date}_${day.key}`,

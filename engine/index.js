@@ -3,8 +3,11 @@
 //   no DOM, no fetch, no localStorage, no Date.now(); time is passed in.
 // Modules are added phase by phase: catalog (1), model + prescribe (2),
 // trials (4), coldstart (5), volume (6).
-export const ENGINE_VERSION = "3.0.0-phase3";
+export const ENGINE_VERSION = "3.1.0";
 export * as catalog from "./catalog.js";
 export * as model from "./model.js";
 export * as prescription from "./prescribe.js";
 export * as replay from "./replay.js";
+export * as recovery from "./recovery.js";
+export * as validate from "./validate.js";
+export * as assess from "./assess.js";

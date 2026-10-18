@@ -2,11 +2,13 @@
 // The coach reads app context, explains, remembers, and proposes changes to
 // today's workout. It never writes weights or reps; Apply sends its proposal
 // through the engine.
-import { state, applyProposal, ls } from "./store.js";
+import { state, applyProposal, ls, addConstraint, removeConstraint } from "./store.js";
+import { active, describe } from "../data/constraints.js";
 import { describeChange, validateChange, isDone } from "./session.js";
 import { e1rm } from "../engine/model.js";
 import { post } from "../data/sheets.js";
-import { esc, toast } from "./dom.js";
+import { esc, toast, sheet } from "./dom.js";
+import { isAvoided } from "../engine/validate.js";
 import { md } from "./md.js";
 
 const KEY = "il3:coach";
@@ -29,6 +31,8 @@ export function buildContext() {
       switchedFrom: e.switchedFrom,
     })),
     current: s.cur,
+    selection: s.selection ?? null,
+    checks: (s.adjustments ?? []).map((n) => n.text),
   } : null;
 
   // Recent sessions, compact
@@ -54,6 +58,8 @@ export function buildContext() {
   return {
     today, recent, strength,
     program: state.program.days.map((d) => ({ key: d.key, label: d.label, exercises: d.exercises.map((e) => e.name) })),
+    rules: active(state.constraints).map((c) => ({ id: c.id, type: c.type, target: c.target, reason: c.reason, text: describe(c, idx) })),
+    lastAssessment: (s?.saved && s.assessment ? { date: s.date, day: s.dayLabel, headline: s.assessment.headline, lines: s.assessment.lines } : null) ?? ls.get("il3:lastAssessment", null),
     settings: state.settings, bodyweight: state.bodyweight,
     predictionAccuracyReps: state.stats?.maeSettled ?? null,
     catalog,
@@ -75,7 +81,7 @@ export function renderCoach(root) {
     return `<div class="msg coach">${md(m.content)}</div>${cards}`;
   }).join("");
   root.innerHTML = `
-    <header class="p-head"><h1>Coach</h1>${thread.length ? `<button class="icon-btn" id="coach-clear" aria-label="Start a new conversation"><i class="ti ti-refresh" aria-hidden="true"></i></button>` : ""}</header>
+    <header class="p-head"><h1>Coach</h1><div style="display:flex;gap:6px"><button class="icon-btn" id="coach-rules" aria-label="Your training rules"><i class="ti ti-list-check" aria-hidden="true"></i></button>${thread.length ? `<button class="icon-btn" id="coach-clear" aria-label="Start a new conversation"><i class="ti ti-refresh" aria-hidden="true"></i></button>` : ""}</div></header>
     <div class="chat" id="chat">
       ${thread.length ? msgs : `<div class="empty" style="margin-top:4px">Ask about today's numbers, tell it what's going on, or ask for a change. It sees your workout, history and strength estimates, and anything it changes, you approve first.</div>`}
       ${busy ? `<div class="msg coach mut"><i class="ti ti-loader" aria-hidden="true"></i> Thinking…</div>` : ""}
@@ -87,11 +93,13 @@ export function renderCoach(root) {
     </form>`;
   root.querySelector("#composer").addEventListener("submit", (ev) => { ev.preventDefault(); send(root, root.querySelector("#coach-input").value); });
   root.querySelectorAll(".prompt").forEach((b) => b.addEventListener("click", () => send(root, b.textContent)));
+  root.querySelector("#coach-rules")?.addEventListener("click", rulesSheet);
   root.querySelector("#coach-clear")?.addEventListener("click", () => { thread = []; save(); renderCoach(root); });
   root.querySelectorAll("[data-apply]").forEach((b) => b.addEventListener("click", () => {
     const [i, j] = b.dataset.apply.split(":").map(Number);
     const p = thread[i].proposals[j];
-    const problems = p.changes.map((c) => validateChange(state.session, c, state.index, state.program)).filter(Boolean);
+    const problems = p.changes.map((c) => validateChange(state.session, c, state.index, state.program)
+      ?? (c.type === "switch_exercise" && isAvoided(state.index.byId.get(c.toExerciseId), active(state.constraints)) ? "That exercise is on your avoid list." : null)).filter(Boolean);
     if (problems.length) { toast(problems[0]); return; }
     applyProposal(p.changes);
     p.status = "applied"; save(); renderCoach(root);
@@ -149,6 +157,8 @@ async function send(root, text) {
     const messages = thread.slice(-12).map((m) => ({ role: m.role, content: m.content }));
     while (messages.length && messages[0].role !== "user") messages.shift();
     const d = await askCoach({ messages, context: buildContext() });
+    for (const r of d.rulesAdded ?? []) addConstraint(r);
+    for (const id of d.rulesRemoved ?? []) removeConstraint(id);
     const proposals = (d.proposals ?? []).map((p) => ({ ...p, status: null }));
     thread.push({ role: "assistant", content: d.reply || (proposals.length ? "Here's what I'd change:" : "Noted."), proposals });
   } catch (err) {
@@ -159,4 +169,18 @@ async function send(root, text) {
   }
   busy = false; save();
   if (document.getElementById("composer")) renderCoach(root);
+}
+
+// The standing rules the generator enforces. Viewable and removable here;
+// new ones come from telling the coach.
+export function rulesSheet() {
+  const list = active(state.constraints);
+  const rows = list.map((c) => `<div class="rule-row"><span>${esc(describe(c, state.index))}${c.reason ? `<br><span class="mut">${esc(c.reason)}</span>` : ""}</span><button class="icon-btn" data-rm="${esc(c.id)}" aria-label="Remove rule"><i class="ti ti-x" aria-hidden="true"></i></button></div>`).join("");
+  const el = sheet(`<h2>Your training rules</h2><div class="sub">Every workout is checked against these before you see it. Tell the coach to add one.</div>${rows || `<div class="mut" style="padding:12px 0">No rules yet.</div>`}`);
+  el.querySelectorAll("[data-rm]").forEach((b) => b.addEventListener("click", () => {
+    if (!confirm("Remove this rule?")) return;
+    removeConstraint(b.dataset.rm);
+    rulesSheet();
+    toast("Rule removed");
+  }));
 }

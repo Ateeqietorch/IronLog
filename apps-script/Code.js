@@ -459,6 +459,7 @@ const V3_TABLES = {
   Trials:         ["Id", "UpdatedAt", "JSON"],
   Review:         ["Name", "UpdatedAt", "JSON"],
   CoachMemory:    ["Id", "UpdatedAt", "JSON"],
+  Constraints:    ["Id", "UpdatedAt", "JSON"],
 };
 
 // ── Coach (conversational agent) ───────────────────────────────────────────
@@ -496,6 +497,24 @@ const COACH_TOOLS = [
     }
   },
   {
+    name: "add_rule",
+    description: "Save a standing training rule the app's generator enforces on every future session: an exercise to never program, a joint to protect, or a preferred exercise. Use this (not remember) whenever the lifter says they don't want an exercise, something hurts, or they prefer one exercise over another. This is what makes \"noted\" true.",
+    input_schema: {
+      type: "object",
+      properties: {
+        type: { type: "string", enum: ["avoid_exercise", "avoid_keyword", "joint_flag", "prefer_exercise"], description: "avoid_exercise / prefer_exercise: target is a catalog exercise id. avoid_keyword: target is a phrase (e.g. \"bent over row\"). joint_flag: target is a muscle such as lower-back, shoulder, knee, elbow." },
+        target: { type: "string" },
+        reason: { type: "string", description: "A few words, e.g. \"lower back\"." }
+      },
+      required: ["type", "target"]
+    }
+  },
+  {
+    name: "remove_rule",
+    description: "Delete a standing training rule by its id from the rules list in context, when the lifter says it no longer applies.",
+    input_schema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] }
+  },
+  {
     name: "remember",
     description: "Save a durable fact about the lifter for future conversations (an injury, equipment their gym lacks, a preference). Keep it to one short sentence. Don't save one-off moods or things already in context.",
     input_schema: { type: "object", properties: { note: { type: "string" } }, required: ["note"] }
@@ -513,8 +532,11 @@ function coachSystem(context, memory) {
     "How the app works: a deterministic engine sets every weight and rep from the lifter's logged sets (a per-exercise strength estimate, a rep-range aim, and a reps-in-reserve target for the week). You don't pick numbers. When you explain a number, use the reason and estimate in context. If the lifter wants different numbers, tell them to log what they actually do; the engine adapts set to set.",
     "You can change today's workout only through propose_changes (switch, skip, set count, reorder, change day). Use it when the lifter asks for a change or clearly needs one (pain, missing equipment, short on time). For switches, choose toExerciseId from the catalog list in context, matching the movement pattern and muscles. Prefer exercises that load the muscle at long lengths when choices are equal.",
     "Evidence you can rely on: about 10+ hard sets per muscle per week, sets taken to roughly 0-3 reps from failure, rest of 90 seconds or more, deloads every 4-6 weeks or when performance drops, adding reps or load both build muscle. Never tell them to train through sharp or joint pain; suggest a pain-free alternative or skipping, and seeing a professional if it persists.",
-    "Constraints from the lifter: avoid barbell back squats, conventional deadlifts, and unsupported bent-over rows unless they ask.",
-    "Use remember for durable facts only (injuries, equipment, preferences). Don't mention the tools by name.",
+    "Standing rules are in context.rules. The app enforces them itself: before any workout is shown, a validator swaps avoided exercises, drops near-duplicate exercises, caps sets per movement pattern (6) and per muscle, limits heavy lower-back work, and picks the day by recovery instead of list order. What it changed today is in context.today.checks, and why it chose the day is in context.today.selection. Use those to explain; don't redo their work.",
+    "Be proactive: if you see redundant volume, a muscle trained before it recovered, or anything that conflicts with the rules or the goal, say so and propose the fix without waiting to be asked.",
+    "When the lifter states a preference or limit about exercises or joints, call add_rule so it sticks. Never say you noted something unless you called add_rule or remember.",
+    "Goal: balanced hypertrophy across every trained muscle. context.lastAssessment is how the most recent workout moved them toward it.",
+    "Use remember for durable facts that aren't training rules (equipment, schedule). Don't mention the tools by name.",
     "",
     "Remembered notes (id: note):",
     memory.length ? memory.map(m => m.key + ": " + m.value.note).join("\n") : "(none yet)",
@@ -548,6 +570,9 @@ function runCoach(ss, body) {
 
   const proposals = [];
   const remembered = [];
+  const rulesAdded = [];
+  const rulesRemoved = [];
+  const ruleSheet = getOrCreateSheet(ss, "Constraints", V3_TABLES.Constraints);
   let model = COACH_MODEL;
   let reply = "";
   for (let turn = 0; turn < 5; turn++) {
@@ -567,7 +592,19 @@ function runCoach(ss, body) {
     const results = uses.map(u => {
       let out = "ok";
       if (u.name === "propose_changes") { proposals.push(u.input); out = "Shown to the lifter as a card with Apply / Not now. Don't repeat the details; one short line pointing to it is enough."; }
-      else if (u.name === "remember" && u.input && u.input.note) {
+      else if (u.name === "add_rule" && u.input && u.input.type && u.input.target) {
+        const rule = { id: "c" + new Date().getTime() + "-" + rulesAdded.length, type: String(u.input.type), target: String(u.input.target).slice(0, 80), reason: String(u.input.reason || "").slice(0, 120), addedAt: new Date().toISOString().slice(0, 10), source: "coach" };
+        ruleSheet.appendRow([rule.id, new Date().toISOString(), JSON.stringify(rule)]);
+        rulesAdded.push(rule); out = "Saved. The generator applies it from the next session built.";
+      } else if (u.name === "remove_rule" && u.input && u.input.id) {
+        const data = ruleSheet.getDataRange().getValues();
+        let found = false;
+        for (let i = 1; i < data.length; i++) if (String(data[i][0]) === String(u.input.id)) {
+          let v = {}; try { v = JSON.parse(data[i][2]); } catch (e) {}
+          v.removed = true; ruleSheet.getRange(i + 1, 2, 1, 2).setValues([[new Date().toISOString(), JSON.stringify(v)]]); found = true;
+        }
+        rulesRemoved.push(String(u.input.id)); out = found ? "Removed." : "Removed (it was a built-in rule; the app drops it).";
+      } else if (u.name === "remember" && u.input && u.input.note) {
         const id = "m" + new Date().getTime() + "-" + remembered.length;
         memSheet.appendRow([id, new Date().toISOString(), JSON.stringify({ note: String(u.input.note).slice(0, 300) })]);
         remembered.push(u.input.note); out = "Saved.";
@@ -583,8 +620,8 @@ function runCoach(ss, body) {
     reply = reply ? reply + "\n" : "";
   }
   reply = reply.trim();
-  if (!reply) reply = proposals.length ? "Here's what I'd change:" : remembered.length ? "Noted." : "Sorry, I didn't get an answer back. Try asking again.";
-  return { reply, proposals, remembered, model };
+  if (!reply) reply = proposals.length ? "Here's what I'd change:" : (remembered.length || rulesAdded.length) ? "Noted." : "Sorry, I didn't get an answer back. Try asking again.";
+  return { reply, proposals, remembered, rulesAdded, rulesRemoved, model };
 }
 
 function doPost(e) {

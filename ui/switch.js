@@ -3,6 +3,8 @@
 // permanently in the program.
 import { state, switchExercise } from "./store.js";
 import { rankAlternatives, searchExercises } from "../engine/alternatives.js";
+import { isAvoided } from "../engine/validate.js";
+import { active } from "../data/constraints.js";
 import { FREE_EXERCISE_DB } from "../engine/seed/free-exercise-db.js";
 import { TRIAL_MIN, TRIAL_MAX, TRIAL_DEFAULT } from "../data/trials.js";
 import { esc, sheet, closeSheet, toast } from "./dom.js";
@@ -22,7 +24,7 @@ export function switchSheet(exIdx) {
   const s = state.session;
   const e = s.exercises[exIdx];
   const lookup = new Map([...state.index.list, ...FREE_EXERCISE_DB].map((x) => [x.id, x]));
-  const ranked = e.ex ? rankAlternatives(e.ex, state.index.list, { models: state.models, limit: 10 }) : [];
+  const ranked = e.ex ? rankAlternatives(e.ex, state.index.list, { models: state.models, limit: 10, avoid: (c) => !!isAvoided(c, active(state.constraints)) }) : [];
   const name = e.ex?.name ?? e.name;
 
   const el = sheet(`<h2>Switch ${esc(name)}</h2>

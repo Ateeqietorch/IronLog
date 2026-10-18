@@ -1,9 +1,8 @@
 // Train screen (DESIGN-SPEC.md §5.1–5.5).
-import { state, setSession, startDay, finishSession, hasPending, undo, isSaving, reviewTrial } from "./store.js";
+import { state, setSession, startDay, finishSession, hasPending, undo, isSaving, reviewTrial, suggestNext, today } from "./store.js";
 import { switchSheet } from "./switch.js";
 import { inReview, trialSummary } from "../data/trials.js";
 import { logSet, target, isDone, sessionDone, anyLogged, stepLoad } from "./session.js";
-import { nextDay } from "../data/program.js";
 import { statusLine } from "../engine/meso.js";
 import { esc, sheet, closeSheet, toast, buzz } from "./dom.js";
 import { startRest } from "./rest.js";
@@ -60,6 +59,7 @@ export function renderTrain(root) {
     <div class="strip" aria-hidden="true">${strip}</div>
     ${state.offline ? `<div class="notice warn">Couldn't reach your sheet. Today's sets are saved on this phone and will sync.</div>` : ""}
     ${reviewCards()}
+    ${checkCard(s)}
     ${e ? nowCard(s, e) : ""}
     ${upNext(s)}
     ${finishBlock(s)}
@@ -157,17 +157,48 @@ function finishBlock(s) {
   return "";
 }
 
+// What the generator decided before showing today's workout, and why.
+function checkCard(s) {
+  const fixes = (s.adjustments ?? []).filter((n) => n.kind === "fix");
+  const notes = (s.adjustments ?? []).filter((n) => n.kind === "note");
+  if (!s.selection && !fixes.length && !notes.length) return "";
+  if (anyLogged(s)) return "";
+  const items = [...fixes, ...notes].map((n) => `<li>${esc(n.text)}</li>`).join("");
+  return `<section class="card check" aria-label="Why this workout">
+    <div class="label" style="margin-top:0"><i class="ti ti-shield-check" aria-hidden="true"></i> Checked before you start</div>
+    ${s.selection ? `<p class="review-txt">${esc(s.selection)}</p>` : ""}
+    ${items ? `<ul class="check-list">${items}</ul>` : ""}
+  </section>`;
+}
+
+function assessmentCard(a) {
+  if (!a) return "";
+  const icon = { closer: "ti-trending-up up", steady: "ti-arrow-right", off: "ti-trending-down down", baseline: "ti-flag" }[a.verdict];
+  return `<section class="card assess ${esc(a.verdict)}" aria-label="Workout assessment">
+    <div class="label" style="margin-top:0"><i class="ti ti-target-arrow" aria-hidden="true"></i> Goal: balanced muscle growth</div>
+    <div class="ex-name"><i class="ti ${icon}" aria-hidden="true"></i> ${esc(a.headline)}</div>
+    <ul class="check-list">${a.lines.map((l) => `<li>${esc(l)}</li>`).join("")}</ul>
+  </section>`;
+}
+
+function tomorrow() {
+  return new Date(Date.parse(today() + "T00:00:00Z") + 86400000).toISOString().slice(0, 10);
+}
+
 function renderSaved(root, s) {
-  const next = nextDay(state.program, state.rows);
+  const pick = suggestNext(tomorrow());
+  const next = pick.day;
   const sets = s.exercises.reduce((a, e) => a + e.logged.length, 0);
   root.innerHTML = `
     <header class="t-head"><div><div class="t-status">${esc(s.dayLabel)} · ${sets} sets</div><div class="t-day">${state.sync === "saving" ? "Saving…" : state.sync === "pending" ? "Saved on phone" : "Workout saved"}</div></div>${syncChip()}</header>
+    ${assessmentCard(s.assessment)}
     ${reviewCards()}
     <div class="empty">${state.sync === "saving" ? "Sending your sets to your sheet. You can close the app; it finishes next time if it doesn't get through." : state.sync === "pending" ? "Your sheet couldn't be reached, so this workout is saved on this phone and will sync next time IronLog opens online." : "Every set is in your sheet, and your strength estimates are updated."}
+      ${pick.reason ? `<div class="mut" style="margin-top:10px">Next up: <b>${esc(next.label)}</b>. ${esc(pick.reason)}</div>` : ""}
       <button class="primary" id="start-next"><i class="ti ti-player-play" aria-hidden="true"></i>Start ${esc(next.label)}</button>
       <button class="link" id="pick-day">Pick a different day</button>
     </div>`;
-  root.querySelector("#start-next").onclick = () => { startDay(next.key); setSession(state.session); };
+  root.querySelector("#start-next").onclick = () => { const p = suggestNext(today()); startDay(p.day.key, { selection: p.reason }); setSession(state.session); };
   root.querySelector("#pick-day").onclick = dayPicker;
   bindReviews(root);
 }

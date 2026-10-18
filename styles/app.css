@@ -193,3 +193,14 @@ body:not([data-tab="train"]) .app.resting { padding-bottom: calc(68px + env(safe
 .msg.coach ul, .msg.coach ol { margin: 0 0 8px 20px; }
 .msg.coach li { margin: 2px 0; }
 .msg.coach b { color: #fff; font-weight: 600; }
+
+/* pre-session check + end-of-workout assessment */
+.check-list { margin: 6px 0 2px; padding-left: 18px; font-size: 14px; line-height: 1.5; color: var(--silver-2); }
+.check-list li { margin: 4px 0; }
+.card.check .label i, .card.assess .label i { color: var(--steel); }
+.card.assess .ex-name { display: flex; align-items: center; gap: 8px; }
+.card.assess .up { color: var(--done); } .card.assess .down { color: var(--warn); }
+.card.assess.closer { border-left: 3px solid var(--done); }
+.card.assess.off { border-left: 3px solid var(--warn); }
+.rule-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--line, rgba(255,255,255,.06)); font-size: 15px; }
+.rule-row .mut { font-size: 13px; }

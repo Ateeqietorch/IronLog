@@ -6,11 +6,15 @@ import { replayHistory } from "../engine/replay.js";
 import { mesoWeek } from "../engine/meso.js";
 import { tables } from "../data/sheets.js";
 import { readLog, readBodyweight, writeSession, dedupeLog } from "../data/log.js";
-import { loadProgram, nextDay, replaceSlot, saveProgramStorage, readProgramStorage } from "../data/program.js";
+import { loadProgram, replaceSlot, saveProgramStorage, readProgramStorage } from "../data/program.js";
 import { newTrial, applyTrials, recordSession, resolveTrial } from "../data/trials.js";
 import { buildSession, toRows, applyChanges } from "./session.js";
+import { validateDay } from "../engine/validate.js";
+import { muscleState, recovered, chooseNextDay } from "../engine/recovery.js";
+import { assessSession } from "../engine/assess.js";
+import { withDefaults, mergeConstraints, active, cleanConstraint } from "../data/constraints.js";
 
-const K = { session: "il3:session", log: "il3:logCache", meso: "il3:meso", settings: "il3:settings", pending: "il3:pending", bw: "il3:bodyweight", trials: "il3:trials", own: "il3:ownExercises" };
+const K = { session: "il3:session", log: "il3:logCache", meso: "il3:meso", settings: "il3:settings", pending: "il3:pending", bw: "il3:bodyweight", trials: "il3:trials", own: "il3:ownExercises", constraints: "il3:constraints" };
 
 export const ls = {
   get(k, fallback = null) { try { const v = localStorage.getItem(k); return v == null ? fallback : JSON.parse(v); } catch { return fallback; } },
@@ -26,7 +30,7 @@ export const today = () => {
 export const state = {
   index: null, rows: [], models: {}, stats: null, program: null, bodyweight: null,
   session: null, settings: { policy: "balanced", haptics: true }, meso: null,
-  trials: [], sync: "idle", offline: false, listeners: new Set(),
+  trials: [], constraints: [], sync: "idle", offline: false, listeners: new Set(),
 };
 
 export function emit() { for (const f of state.listeners) f(state); }
@@ -42,6 +46,7 @@ export async function boot({ fixture = null } = {}) {
   state.settings = { ...state.settings, ...ls.get(K.settings, {}) };
   state.meso = ls.get(K.meso, null);
   state.trials = ls.get(K.trials, []);
+  state.constraints = withDefaults(ls.get(K.constraints, []));
   let own = ls.get(K.own, []);
   if (!fixture) {
     try {
@@ -54,6 +59,15 @@ export async function boot({ fixture = null } = {}) {
       const mine = new Set(state.trials.map((t) => t.id));
       const extra = recs.map((r) => r.value).filter((t) => t?.id && !mine.has(t.id));
       if (extra.length) { state.trials = [...state.trials, ...extra]; ls.set(K.trials, state.trials); emit(); }
+    }).catch(() => {});
+    tables.list("Constraints").then((recs) => {
+      const remote = recs.map((r) => r.value).filter(Boolean);
+      if (!remote.length) return;
+      state.constraints = mergeConstraints(state.constraints, remote);
+      ls.set(K.constraints, state.constraints);
+      // Rebuild today's workout if it hasn't started, so new rules apply now.
+      if (state.session && !state.session.saved && !anyLoggedIn(state.session)) startDay(state.session.dayKey, { persist: false, selection: state.session.selection });
+      emit();
     }).catch(() => {});
   }
   state.index = indexCatalog(mergeCatalogs(own, CURATED));
@@ -83,7 +97,10 @@ export async function boot({ fixture = null } = {}) {
   const draft = ls.get(K.session, null);
   const draftHasSets = draft?.exercises?.some((e) => e.logged?.length);
   if (draft && !draft.saved && draftHasSets && draft.date >= shiftDate(today(), -1)) state.session = draft;
-  else startDay(nextDay(state.program, state.rows).key, { persist: false });
+  else {
+    const pick = suggestNext(today());
+    startDay(pick.day.key, { persist: false, selection: pick.reason });
+  }
   emit();
   if (pending.length && !fixture) retryPending();
 }
@@ -96,15 +113,50 @@ export function weekInfo(date = today()) {
   return mesoWeek(state.meso ?? { start: date }, date);
 }
 
-export function startDay(dayKey, { persist = true } = {}) {
+// Which day to train next, by recovery rather than list order.
+export function suggestNext(date = today()) {
+  const constraints = active(state.constraints);
+  const prepare = (d) => validateDay(applyTrials(d, state.trials, state.index), { index: state.index, constraints }).day;
+  return chooseNextDay(state.program, state.rows, state.index, date, { prepare }) ?? { day: state.program.days[0], reason: "" };
+}
+
+export function startDay(dayKey, { persist = true, selection = null } = {}) {
   const base = state.program.days.find((d) => d.key === dayKey) ?? state.program.days[0];
-  const day = applyTrials(base, state.trials, state.index);
   const date = today();
+  // Every session passes the validator before you see it: avoid list,
+  // spine load, redundant exercises, pattern caps, per-muscle volume.
+  const st = muscleState(state.rows, state.index, date);
+  const checked = validateDay(applyTrials(base, state.trials, state.index), {
+    index: state.index, constraints: active(state.constraints), recovery: st,
+    recoveredFn: (m) => recovered(st, m, date), date,
+  });
   state.session = buildSession({
-    day, index: state.index, models: state.models, date, weekInfo: weekInfo(date),
+    day: checked.day, index: state.index, models: state.models, date, weekInfo: weekInfo(date),
     bodyweight: state.bodyweight, policy: state.settings.policy,
   });
+  state.session.adjustments = checked.notes;
+  state.session.selection = selection;
   if (persist) saveDraft(); else ls.del(K.session);
+}
+
+// ── Standing rules ─────────────────────────────────────────────────────────
+export function setConstraints(list) {
+  state.constraints = list;
+  ls.set(K.constraints, list);
+  tables.upsert("Constraints", list.map((c) => ({ key: c.id, value: c }))).catch(() => {});
+  if (state.session && !state.session.saved && !anyLoggedIn(state.session)) startDay(state.session.dayKey, { persist: false, selection: state.session.selection });
+  emit();
+}
+export function addConstraint(c) {
+  const x = cleanConstraint(c);
+  if (!x) return null;
+  const dup = state.constraints.find((y) => !y.removed && y.type === x.type && y.target.toLowerCase() === x.target.toLowerCase());
+  if (dup) return dup;
+  setConstraints([...state.constraints, x]);
+  return x;
+}
+export function removeConstraint(id) {
+  setConstraints(state.constraints.map((c) => (c.id === id ? { ...c, removed: true } : c)));
 }
 
 let undoSnapshot = null;
@@ -178,7 +230,10 @@ export async function finishSession({ fixture = false } = {}) {
   // Mark it saved and keep a pending copy before the network call, so a
   // reload mid-save resumes the same save instead of starting a new one.
   addPending({ sessionKey: s.sessionKey, rows, rowsObj });
-  state.session = { ...s, saved: true };
+  let assessment = null;
+  try { assessment = assessSession({ session: s, rows: state.rows, index: state.index, date: s.date }); } catch { /* never block a save */ }
+  if (assessment) ls.set("il3:lastAssessment", { date: s.date, day: s.dayLabel, verdict: assessment.verdict, headline: assessment.headline, lines: assessment.lines });
+  state.session = { ...s, saved: true, assessment };
   ls.del(K.session);
   state.sync = "saving"; emit();
   if (fixture) { dropPending(s.sessionKey, rows); state.sync = "saved"; onFinish.forEach((f) => f(s)); emit(); return { ok: true, pending: false }; }

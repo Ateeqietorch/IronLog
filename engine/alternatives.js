@@ -13,11 +13,11 @@ function cosine(a = {}, b = {}) {
 
 const hasHistory = (models, id) => ["both", "L", "R"].some((s) => models?.[`${id}|${s}`]?.logE1rm != null);
 
-export function rankAlternatives(ex, list, { models = {}, exclude = [], limit = 12 } = {}) {
+export function rankAlternatives(ex, list, { models = {}, exclude = [], limit = 12, avoid = null } = {}) {
   if (!ex) return [];
   const skip = new Set([ex.id, ...exclude]);
   return list
-    .filter((c) => !skip.has(c.id))
+    .filter((c) => !skip.has(c.id) && !(avoid && avoid(c)))
     .map((c) => {
       const overlap = cosine(ex.contributions, c.contributions);
       const samePattern = c.pattern === ex.pattern;
