@@ -91,7 +91,10 @@ export function logSet(session, exIdx, entry, now = null) {
   if (e.ex && e.logged.length < e.sets) {
     const loggedSets = e.logged.map((l) => ({ index: l.index, load: l.load, reps: repsMin(l.reps), rir: l.rir }));
     const common = { exercise: e.ex, loggedSets, date: s.date, repRange: e.slot.repRange, bodyweight: s.bodyweight, gymProfile: s.gymProfile };
-    if (e.plan && (e.mode === "coached" || e.mode === "calibrating")) {
+    const asPlanned = planned && Number(rec.load) === Number(planned.load) && repsMin(rec.reps) === planned.reps && rec.rir === planned.rir;
+    if (e.coachSet && asPlanned) {
+      // Coach's numbers and it went as planned: keep them.
+    } else if (e.plan && (e.mode === "coached" || e.mode === "calibrating")) {
       // Calibration sets snap the estimate to what you just did (spec §6.3).
       e.plan = recalcRemaining({ ...common, plan: e.plan, model: e.model, models: e.models, gainCap: e.mode === "calibrating" && si === 0 ? 1 : 0.5 });
     } else if (!e.plan && e.mode === "manual") {
@@ -109,6 +112,36 @@ export function logSet(session, exIdx, entry, now = null) {
   }
   if (isDone(e)) s.cur = nextUndone(s, exIdx);
   return s;
+}
+
+const validNumbers = (list) => Array.isArray(list) && list.length > 0 && list.every((x) => Number(x.load) >= 0 && Number(x.reps) >= 1);
+
+// Coach-given numbers for the sets you haven't done. If there's no strength
+// model yet, the first set seeds one, and every set after adapts to what you
+// actually log (same as a calibration set).
+export function coachNumbers(e, numbers, { bodyweight = null, note = null } = {}) {
+  const done = e.logged.map((l) => ({ index: l.index, load: l.load, reps: repsMin(l.reps), rir: l.rir }));
+  const start = done.length;
+  const baseRir = e.plan?.reason?.rir ?? 2;
+  const sets = [
+    ...done.map((d) => ({ ...d, last: false })),
+    ...numbers.map((n, j) => ({ index: start + j, load: Number(n.load), reps: Math.round(Number(n.reps)), rir: n.rir != null ? Number(n.rir) : baseRir, last: false })),
+  ];
+  sets[sets.length - 1].last = true;
+  const first = sets[start];
+  let { model, models, mode } = e;
+  if (!model && !models && e.ex) {
+    const k = defaultK(e.ex.kClass);
+    const eff = toEffective(e.ex, first.load, bodyweight ?? 0);
+    model = eff > 0 ? newModel(e.ex.id, { kClass: e.ex.kClass, k, e1rm: eff * (1 + (first.reps + first.rir) / k), sd: 0.15 }) : null;
+    mode = model ? "calibrating" : "manual";
+  } else if (mode === "manual") mode = "calibrating";
+  const plan = {
+    load: first.load, effLoad: first.load, sets,
+    reason: { ...(e.plan?.reason ?? {}), rir: first.rir, baseRir, aimReps: first.reps, load: first.load, changePct: null, e1rm: e.plan?.reason?.e1rm ?? null, outOfRange: false },
+    text: note || "Your coach's numbers. Sets after this one adjust to how it actually goes.",
+  };
+  return { ...e, plan, model, models, mode, sets: sets.length, coachSet: true };
 }
 
 export function nextUndone(s, from) {
@@ -152,12 +185,23 @@ export { loadFor };
 
 // ── Coach proposals (applied only after the lifter taps Apply) ─────────────
 export function describeChange(s, c, index) {
+  // Names are captured when the proposal arrives (c.fromName / c.toName);
+  // after it's applied the session has moved on, so looking them up again
+  // would describe the new state ("swap X for X").
   const name = (i) => s.exercises[i]?.ex?.name ?? s.exercises[i]?.name ?? `exercise ${i + 1}`;
+  const from = c.fromName ?? name(c.exerciseIndex);
+  const scope = c.scope === "permanent" ? "from now on" : c.scope === "trial" ? `trial for ${c.trialSessions ?? 3} sessions` : "today only";
+  const nums = (list) => (list ?? []).map((x) => `${x.load}×${x.reps}`).join(", ");
   switch (c.type) {
-    case "switch_exercise": return `Swap ${name(c.exerciseIndex)} for ${index.byId.get(c.toExerciseId)?.name ?? c.toExerciseId} (today only${s.exercises[c.exerciseIndex]?.logged?.length ? ", for the sets you have left" : ""})`;
-    case "skip_exercise": return `Skip ${name(c.exerciseIndex)}`;
-    case "set_count": return `${name(c.exerciseIndex)}: ${c.sets} sets`;
-    case "move_exercise": return `Move ${name(c.exerciseIndex)} to position ${c.toPosition + 1}`;
+    case "switch_exercise": {
+      const to = c.toName ?? c.newExercise?.name ?? index.byId.get(c.toExerciseId)?.name ?? c.toExerciseId;
+      return `Swap ${from} for ${to} (${scope})${c.numbers?.length ? `: ${nums(c.numbers)}` : ""}`;
+    }
+    case "skip_exercise": return `Skip ${from}`;
+    case "set_count": return `${from}: ${c.sets} sets (${scope})`;
+    case "rep_range": return `${from}: ${c.repRange?.[0]}–${c.repRange?.[1]} reps (${scope})`;
+    case "set_numbers": return `${from}: ${nums(c.numbers)}`;
+    case "move_exercise": return `Move ${from} to position ${c.toPosition + 1}`;
     case "change_day": return `Switch today's workout to ${c.dayKey}`;
     default: return "Unknown change";
   }
@@ -168,9 +212,12 @@ export function validateChange(s, c, index, program) {
   if (c.type === "change_day") return program.days.some((d) => d.key === c.dayKey) ? null : "That day isn't in your program.";
   if (!e) return "That exercise isn't in today's workout.";
   if (c.type === "switch_exercise") {
-    if (!index.byId.has(c.toExerciseId)) return "That exercise isn't in the catalog.";
+    if (!c.newExercise && !index.byId.has(c.toExerciseId)) return "That exercise isn't in the catalog.";
   }
   if (c.type === "set_count" && !(c.sets >= 1)) return "Invalid set count.";
+  if (c.type === "rep_range" && !(Array.isArray(c.repRange) && c.repRange[0] >= 1 && c.repRange[1] >= c.repRange[0])) return "Invalid rep range.";
+  if ((c.type === "set_numbers" || c.numbers) && !validNumbers(c.numbers)) return "Those sets need a weight and reps each.";
+  if (c.type === "set_numbers" && !e.ex) return "That exercise isn't coached, so log it directly.";
   return null;
 }
 
@@ -197,7 +244,8 @@ export function applyChanges(session, changes, { index, models }) {
         ...base, name: ex.name, exerciseId: ex.id, repRange: ex.defaultRepRange, unilateral: !!ex.unilateral, programWeight: null,
         sets: split ? Math.max(1, e.sets - e.logged.length) : e.slot.sets, ...(c.trial ? { trial: c.trial } : {}),
       };
-      const fresh = { ...replan(e, slot), logged: [], switchedFrom: e.ex?.name ?? e.name };
+      let fresh = { ...replan(e, slot), logged: [], switchedFrom: e.ex?.name ?? e.name };
+      if (validNumbers(c.numbers)) fresh = coachNumbers(fresh, c.numbers, { bodyweight: s.bodyweight, note: c.note });
       if (split) { e.sets = e.logged.length; s.exercises.splice(c.exerciseIndex + 1, 0, fresh); }
       else s.exercises[c.exerciseIndex] = fresh;
     } else if (c.type === "set_count" && e) {
@@ -205,6 +253,11 @@ export function applyChanges(session, changes, { index, models }) {
       if (!e.ex) { e.sets = n; continue; }
       const fresh = replan(e, { ...e.slot, sets: n });
       s.exercises[c.exerciseIndex] = { ...fresh, logged: e.logged, sets: Math.max(n, e.logged.length) };
+    } else if (c.type === "rep_range" && e?.ex) {
+      const fresh = replan(e, { ...e.slot, repRange: c.repRange });
+      s.exercises[c.exerciseIndex] = e.logged.length ? { ...e, slot: { ...e.slot, repRange: c.repRange } } : { ...fresh, logged: [] };
+    } else if (c.type === "set_numbers" && e?.ex && validNumbers(c.numbers)) {
+      s.exercises[c.exerciseIndex] = coachNumbers(e, c.numbers, { bodyweight: s.bodyweight, note: c.note });
     } else if (c.type === "skip_exercise" && e) {
       if (e.logged.length) e.sets = e.logged.length;
       else s.exercises.splice(c.exerciseIndex, 1);

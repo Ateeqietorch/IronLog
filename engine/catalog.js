@@ -233,3 +233,53 @@ export function mergeCatalogs(...lists) {
   for (const list of lists) for (const ex of list ?? []) if (!byId.has(ex.id)) byId.set(ex.id, ex);
   return [...byId.values()];
 }
+
+// Build a catalog record from a coach-described exercise (anything the
+// lifter names that isn't in the catalog: "incline machine curl", a gym's
+// odd machine). Fills sensible defaults, then validates. Returns
+// { ex } or { problems }. If an exercise with the same name already exists,
+// returns that one instead of a duplicate.
+const STAB_BY_EQUIP = {
+  barbell: "low", dumbbell: "low", cable: "medium", "machine-stack": "high",
+  "machine-plate": "high", smith: "high", bodyweight: "medium", assisted: "high", band: "medium",
+};
+const LOAD_BY_EQUIP = {
+  barbell: "plates", dumbbell: "dumbbell-pair", cable: "stack", "machine-stack": "stack",
+  "machine-plate": "plates", smith: "plates", bodyweight: "bodyweight-plus", assisted: "assisted", band: "fixed",
+};
+const COMPOUND = new Set(["horizontal-press", "incline-press", "vertical-press", "vertical-pull", "horizontal-row"]);
+
+export function exerciseFromSpec(spec, index = null) {
+  if (!spec?.name) return { problems: ["name required"] };
+  if (index) {
+    const key = nameKey(spec.name);
+    const same = index.list?.find((x) => nameKey(x.name) === key || (x.aliases ?? []).some((a) => nameKey(a) === key));
+    if (same) return { ex: same, existing: true };
+  }
+  const contributions = {};
+  for (const [m, v] of Object.entries(spec.contributions ?? spec.muscles ?? {})) {
+    if (MUSCLES.includes(m) && Number(v) > 0) contributions[m] = Math.min(1, Number(v));
+  }
+  const max = Math.max(0, ...Object.values(contributions));
+  if (max > 0 && max < 1) for (const m of Object.keys(contributions)) if (contributions[m] === max) contributions[m] = 1;
+  const equipment = spec.equipment;
+  const pattern = spec.pattern;
+  let id = slugify(spec.name);
+  for (let n = 2; index?.byId?.has(id); n++) id = `${slugify(spec.name)}-${n}`;
+  const range = Array.isArray(spec.repRange) && spec.repRange.length === 2 ? spec.repRange.map(Number) : null;
+  const ex = {
+    id, name: String(spec.name).slice(0, 80), pattern, equipment,
+    loadType: spec.loadType ?? LOAD_BY_EQUIP[equipment],
+    contributions, aliases: [],
+    unilateral: !!spec.unilateral,
+    lengthenedBias: spec.lengthenedBias >= 0 && spec.lengthenedBias <= 1 ? Number(spec.lengthenedBias) : 0.5,
+    stability: STAB_BY_EQUIP[equipment] ?? "medium",
+    kClass: spec.kClass ?? (COMPOUND.has(pattern) ? "upper-compound" : pattern === "squat-free" || pattern === "hip-hinge" ? "lower-free" : pattern === "leg-press" ? "leg-press" : "isolation"),
+    defaultRepRange: range ?? (COMPOUND.has(pattern) ? [8, 12] : [10, 15]),
+    source: "ai-lookup",
+    confidence: 0.8,
+    ...(spec.note ? { note: String(spec.note).slice(0, 120) } : {}),
+  };
+  const problems = validateExercise(ex);
+  return problems.length ? { problems } : { ex };
+}

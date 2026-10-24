@@ -65,3 +65,10 @@ Choices made where the specs were ambiguous. Newest first.
 - **A set within 1 rep of failure caps today's strength estimate.** Before, a 75×5 at 0 RIR on a lift planned at 85×10 only moved the estimate halfway (and was outlier-gated), so the next set went *up*. Near-failure sets are the most accurate data there is, so they now set a ceiling for the rest of the session. The long-term model update is unchanged.
 - **No one-rung-down floor inside a session.** That floor protects against one bad day dragging next week's numbers; mid-session it stopped the load dropping below 80 after failing at 75.
 - **Remaining sets are judged against the load you actually used**, not this morning's planned load, and the note above the sets is rewritten when they change (it used to keep the stale morning text).
+
+## Coach gets real authority — 2026-10-24
+Supersedes the 2026-10-15 "coach never sets loads or reps, today only" decision. Ateeq asked for incline machine curl; the coach could only choose from the catalog, so it swapped in machine preacher curl and told him to pick his own weight.
+- **The coach does what's asked, literally.** If the named exercise isn't in the catalog, it creates it (`newExercise` → `exerciseFromSpec`, saved to the lifter's own catalog and the Exercises tab). It's told never to substitute a lookalike.
+- **The coach can set exact numbers** (`set_numbers`, or `numbers` on a switch), estimating from related lifts when there's no history. If there's no model yet, set 1 seeds one. Sets done as planned keep the coach's numbers; a set that goes differently hands the rest back to the engine.
+- **Long-term changes:** switch, set count and rep range take `scope: today | trial | permanent`; trial and permanent update the program the same way the Switch sheet does.
+- **Proposal cards pin exercise names when they arrive**, so an applied card no longer reads "Swap X for X".

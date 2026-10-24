@@ -1,12 +1,12 @@
 // App state, persistence, and loading. The Train/History/Progress views read
 // from here; nothing here touches the DOM.
-import { indexCatalog, mergeCatalogs, validateExercise } from "../engine/catalog.js";
+import { indexCatalog, mergeCatalogs, validateExercise, exerciseFromSpec } from "../engine/catalog.js";
 import { CURATED } from "../engine/seed/curated.js";
 import { replayHistory } from "../engine/replay.js";
 import { mesoWeek } from "../engine/meso.js";
 import { tables } from "../data/sheets.js";
 import { readLog, readBodyweight, writeSession, dedupeLog } from "../data/log.js";
-import { loadProgram, replaceSlot, saveProgramStorage, readProgramStorage } from "../data/program.js";
+import { loadProgram, replaceSlot, updateSlot, saveProgramStorage, readProgramStorage } from "../data/program.js";
 import { newTrial, applyTrials, recordSession, resolveTrial } from "../data/trials.js";
 import { buildSession, toRows, applyChanges } from "./session.js";
 import { validateDay } from "../engine/validate.js";
@@ -269,12 +269,37 @@ export async function retryPending() {
 
 export const hasPending = () => pendingList().length > 0;
 
-// Coach proposals: change_day restarts today on another day; everything else
-// edits today's session through applyChanges (engine recomputes the numbers).
+// Coach proposals. Exercises the coach describes that aren't in the catalog
+// get added to it first; "trial" and "permanent" changes also update the
+// program; then everything for today goes through applyChanges.
+// Returns a list of problems (empty = applied).
 export function applyProposal(changes) {
   const day = changes.find((c) => c.type === "change_day");
-  if (day) { startDay(day.dayKey); setSession(state.session); return; }
-  setSession(applyChanges(state.session, changes, { index: state.index, models: state.models }), { undoable: true });
+  if (day) { startDay(day.dayKey); setSession(state.session); return []; }
+  const problems = [];
+  const today = [];
+  for (const raw of changes) {
+    const c = { ...raw };
+    if (c.type === "switch_exercise" && c.newExercise && !state.index.byId.has(c.toExerciseId)) {
+      const r = exerciseFromSpec(c.newExercise, state.index);
+      if (!r.ex) { problems.push(`Couldn't add ${c.newExercise.name}: ${r.problems[0]}`); continue; }
+      addExercise(r.ex);
+      c.toExerciseId = r.ex.id;
+    }
+    if (c.type === "switch_exercise" && (c.scope === "trial" || c.scope === "permanent")) {
+      const to = state.index.byId.get(c.toExerciseId);
+      if (to) Object.assign(c, recordSwitch(c.exerciseIndex, to, c.scope, { sessions: c.trialSessions ?? 3 }));
+    }
+    if ((c.type === "set_count" || c.type === "rep_range") && c.scope === "permanent") {
+      const s = state.session;
+      const e = s.exercises[c.exerciseIndex];
+      const next = e && updateSlot(state.program, readProgramStorage(), s.dayKey, e.slotIndex ?? c.exerciseIndex, c.type === "set_count" ? { sets: c.sets } : { repRange: c.repRange });
+      if (next) { saveProgramStorage(next); state.program = loadProgram(state.index); }
+    }
+    today.push(c);
+  }
+  if (today.length) setSession(applyChanges(state.session, today, { index: state.index, models: state.models }), { undoable: true });
+  return problems;
 }
 
 // ── Switching exercises (Today / Trial / Permanent) ────────────────────────
@@ -294,12 +319,13 @@ export function addExercise(ex) {
   tables.upsert("Exercises", [{ key: ex.id, value: ex }]).catch(() => {});
 }
 
-// mode: "today" | "trial" | "permanent"
-export function switchExercise(exIdx, to, mode, { sessions = 3 } = {}) {
-  addExercise(to);
+// Record a trial or permanent swap in the program (not today's session).
+// Returns extra fields for the switch change (the trial badge).
+function recordSwitch(exIdx, to, mode, { sessions = 3 } = {}) {
   const s = state.session;
   const e = s.exercises[exIdx];
-  const change = { type: "switch_exercise", exerciseIndex: exIdx, toExerciseId: to.id };
+  const out = {};
+  if (!e) return out;
   const slotIndex = e.slotIndex ?? exIdx;
   // The program's own exercise for this slot (not today's swap or trial).
   const progDay = state.program.days.find((d) => d.key === s.dayKey);
@@ -311,7 +337,7 @@ export function switchExercise(exIdx, to, mode, { sessions = 3 } = {}) {
     const others = state.trials.map((t) => (t.dayKey === s.dayKey && t.slotIndex === slotIndex && ["active", "review"].includes(t.status) ? { ...t, status: "replaced" } : t));
     const t = newTrial({ dayKey: s.dayKey, slotIndex, from, to, sessions, date: s.date });
     setTrials([...others, t]);
-    change.trial = { id: t.id, n: 1, of: t.sessions, fromName: from.name };
+    out.trial = { id: t.id, n: 1, of: t.sessions, fromName: from.name };
   }
   if (mode === "permanent" && progSlot) {
     const next = replaceSlot(state.program, readProgramStorage(), s.dayKey, slotIndex, to);
@@ -321,7 +347,14 @@ export function switchExercise(exIdx, to, mode, { sessions = 3 } = {}) {
       setTrials(state.trials.map((t) => (t.dayKey === s.dayKey && t.slotIndex === slotIndex && ["active", "review"].includes(t.status) ? { ...t, status: "replaced" } : t)));
     }
   }
-  setSession(applyChanges(s, [change], { index: state.index, models: state.models }), { undoable: mode === "today" });
+  return out;
+}
+
+// mode: "today" | "trial" | "permanent"
+export function switchExercise(exIdx, to, mode, { sessions = 3 } = {}) {
+  addExercise(to);
+  const change = { type: "switch_exercise", exerciseIndex: exIdx, toExerciseId: to.id, ...recordSwitch(exIdx, to, mode, { sessions }) };
+  setSession(applyChanges(state.session, [change], { index: state.index, models: state.models }), { undoable: mode === "today" });
 }
 
 // Trial review: keep it (becomes permanent), go back, or give it 2 more.

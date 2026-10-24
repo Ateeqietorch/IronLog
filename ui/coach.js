@@ -1,7 +1,7 @@
 // Coach tab: conversational agent (DESIGN-SPEC.md §5.9, COACH-ENGINE-SPEC.md §7).
 // The coach reads app context, explains, remembers, and proposes changes to
-// today's workout. It never writes weights or reps; Apply sends its proposal
-// through the engine.
+// today's workout or the program, including exact weights and reps and
+// exercises that aren't in the catalog yet. Nothing changes until Apply.
 import { state, applyProposal, ls, addConstraint, removeConstraint } from "./store.js";
 import { active, describe } from "../data/constraints.js";
 import { describeChange, validateChange, isDone } from "./session.js";
@@ -101,9 +101,10 @@ export function renderCoach(root) {
     const problems = p.changes.map((c) => validateChange(state.session, c, state.index, state.program)
       ?? (c.type === "switch_exercise" && isAvoided(state.index.byId.get(c.toExerciseId), active(state.constraints)) ? "That exercise is on your avoid list." : null)).filter(Boolean);
     if (problems.length) { toast(problems[0]); return; }
-    applyProposal(p.changes);
+    const failed = applyProposal(p.changes);
+    if (failed.length) toast(failed[0]);
     p.status = "applied"; save(); renderCoach(root);
-    toast("Applied to today's workout");
+    if (!failed.length) toast(p.changes.some((c) => c.scope === "permanent") ? "Applied, and your program is updated" : "Applied");
   }));
   root.querySelectorAll("[data-dismiss]").forEach((b) => b.addEventListener("click", () => {
     const [i, j] = b.dataset.dismiss.split(":").map(Number);
@@ -159,7 +160,15 @@ async function send(root, text) {
     const d = await askCoach({ messages, context: buildContext() });
     for (const r of d.rulesAdded ?? []) addConstraint(r);
     for (const id of d.rulesRemoved ?? []) removeConstraint(id);
-    const proposals = (d.proposals ?? []).map((p) => ({ ...p, status: null }));
+    // Pin the names now: once applied, the session shows the new exercise
+    // and a later lookup would read "swap X for X".
+    const named = (c) => {
+      const e = state.session?.exercises?.[c.exerciseIndex];
+      const fromName = e ? (e.ex?.name ?? e.name) : undefined;
+      const toName = c.type === "switch_exercise" ? (c.newExercise?.name ?? state.index.byId.get(c.toExerciseId)?.name) : undefined;
+      return { ...c, ...(fromName ? { fromName } : {}), ...(toName ? { toName } : {}) };
+    };
+    const proposals = (d.proposals ?? []).map((p) => ({ ...p, changes: (p.changes ?? []).map(named), status: null }));
     thread.push({ role: "assistant", content: d.reply || (proposals.length ? "Here's what I'd change:" : "Noted."), proposals });
   } catch (err) {
     const m = String(err.message);

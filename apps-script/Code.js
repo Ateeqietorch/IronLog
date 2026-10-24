@@ -464,15 +464,15 @@ const V3_TABLES = {
 
 // ── Coach (conversational agent) ───────────────────────────────────────────
 // The coach reads everything the app knows (sent as context by the client),
-// can remember things across conversations, and can PROPOSE changes to
-// today's workout. It never sets weights or reps: the engine does that, and
-// every proposal is shown to the lifter to approve.
+// can remember things across conversations, and can PROPOSE changes to the
+// workout and the program — including exact weights and reps and exercises
+// that aren't in the catalog. Every proposal is shown to the lifter to approve.
 const COACH_MODEL = "claude-sonnet-5-5";
 
 const COACH_TOOLS = [
   {
     name: "propose_changes",
-    description: "Propose changes to TODAY's workout. They're shown to the lifter as a card with Apply / Not now; nothing changes until they tap Apply. The app's engine recomputes exact weights and reps for anything you change, so never specify loads or reps.",
+    description: "Change the lifter's workout or program. Shown as a card with Apply / Not now; nothing changes until they tap Apply. Use it to do exactly what the lifter asked.",
     input_schema: {
       type: "object",
       properties: {
@@ -482,10 +482,33 @@ const COACH_TOOLS = [
           items: {
             type: "object",
             properties: {
-              type: { type: "string", enum: ["switch_exercise", "skip_exercise", "set_count", "move_exercise", "change_day"] },
+              type: { type: "string", enum: ["switch_exercise", "skip_exercise", "set_count", "rep_range", "set_numbers", "move_exercise", "change_day"] },
               exerciseIndex: { type: "integer", description: "Index in today's exercise list (0-based)." },
-              toExerciseId: { type: "string", description: "For switch_exercise: an exercise id from the catalog list in context." },
+              scope: { type: "string", enum: ["today", "trial", "permanent"], description: "For switch_exercise, set_count, rep_range. today = this session only; trial = try it for a few sessions then review; permanent = change the program from now on. Default today unless the lifter says otherwise (\"from now on\", \"always\", \"replace it in my program\")." },
+              trialSessions: { type: "integer", minimum: 2, maximum: 6, description: "For scope trial. Default 3." },
+              toExerciseId: { type: "string", description: "For switch_exercise: a catalog id, ONLY if that catalog exercise is the one the lifter named." },
+              newExercise: {
+                type: "object",
+                description: "For switch_exercise when the exercise the lifter named isn't in the catalog. The app adds it. Describe the real exercise they named; never substitute a different one.",
+                properties: {
+                  name: { type: "string", description: "The lifter's exercise, properly named, e.g. \"Incline machine curl\"." },
+                  pattern: { type: "string", enum: ["horizontal-press", "incline-press", "vertical-press", "fly", "lateral-raise", "rear-delt", "vertical-pull", "horizontal-row", "pullover", "elbow-flexion", "elbow-extension", "squat-free", "squat-machine", "leg-press", "hip-hinge", "knee-flexion", "knee-extension", "hip-extension", "hip-adduction", "hip-abduction", "calf-raise", "trunk", "shrug"] },
+                  equipment: { type: "string", enum: ["barbell", "dumbbell", "cable", "machine-stack", "machine-plate", "smith", "bodyweight", "assisted", "band"] },
+                  contributions: { type: "object", description: "Muscle → 1 for prime movers, 0.5 for real synergists. Muscles: chest, front-delts, side-delts, rear-delts, lats, upper-back, traps, biceps, triceps, forearms, quads, hamstrings, glutes, adductors, calves, abs, lower-back." },
+                  unilateral: { type: "boolean" },
+                  lengthenedBias: { type: "number", description: "0-1, how hard it loads the target muscle stretched." },
+                  repRange: { type: "array", items: { type: "integer" }, description: "[low, high]" }
+                },
+                required: ["name", "pattern", "equipment", "contributions"]
+              },
+              numbers: {
+                type: "array",
+                description: "For set_numbers (and optionally switch_exercise): exact weight and reps for each remaining set today, in order. The number of entries is the number of sets. Load in pounds as the lifter loads it (total for barbell/stack, each hand for dumbbells).",
+                items: { type: "object", properties: { load: { type: "number" }, reps: { type: "integer" }, rir: { type: "integer", description: "Reps left in the tank, default this week's target." } }, required: ["load", "reps"] }
+              },
+              note: { type: "string", description: "Optional: one short line shown above the sets explaining the numbers." },
               sets: { type: "integer", minimum: 1, maximum: 8, description: "For set_count." },
+              repRange: { type: "array", items: { type: "integer" }, description: "For rep_range: [low, high]." },
               toPosition: { type: "integer", description: "For move_exercise (0-based)." },
               dayKey: { type: "string", description: "For change_day: a key from the program days in context." }
             },
@@ -528,15 +551,16 @@ const COACH_TOOLS = [
 
 function coachSystem(context, memory) {
   return [
-    "You are the coach inside IronLog, a hypertrophy training app. You're talking with the lifter on their phone, often mid-workout, so be brief: a few short sentences, no headings, no bullet lists unless they ask for a plan. Plain, direct, friendly. Weights are in pounds.",
-    "How the app works: a deterministic engine sets every weight and rep from the lifter's logged sets (a per-exercise strength estimate, a rep-range aim, and a reps-in-reserve target for the week). You don't pick numbers. When you explain a number, use the reason and estimate in context. If the lifter wants different numbers, tell them to log what they actually do; the engine adapts set to set.",
-    "You can change today's workout only through propose_changes (switch, skip, set count, reorder, change day). Use it when the lifter asks for a change or clearly needs one (pain, missing equipment, short on time). For switches, choose toExerciseId from the catalog list in context, matching the movement pattern and muscles. Prefer exercises that load the muscle at long lengths when choices are equal.",
+    "You are the coach inside IronLog, a hypertrophy training app: a coach in the lifter's pocket. You're talking with them on their phone, often mid-workout between sets, so be brief: a few short sentences, no headings, no bullet lists unless they ask for a plan. Plain, direct, friendly. Weights are in pounds.",
+    "Do exactly what the lifter asks. Read every word: \"incline machine curl\" is not a \"machine preacher curl\", \"three sets\" means three sets. Never substitute a different exercise, set count, or number because it's what the catalog happens to have. If the exercise they named isn't in context.catalog, create it with newExercise (the real exercise, properly described) — don't ask, don't offer a lookalike. Only push back when a request would hurt them (sharp or joint pain) or contradicts itself; then say why in one line and still offer what's closest to what they asked.",
+    "Numbers: an engine sets each weight and rep from the lifter's logged sets and updates after every set (a strength estimate per exercise, a rep-range aim, this week's reps-in-reserve target). context.today.exercises[].plan, .reason and .estimate are its numbers; context.strength has estimated one-rep maxes by exercise id. When the engine has no numbers (mode manual, a new or newly created exercise), or the lifter asks for specific numbers, you give them: use set_numbers, or numbers inside switch_exercise. Estimate from related lifts in context.strength and recent history (e.g. an incline dumbbell curl estimate per hand → a machine curl with both arms is very roughly 1.6–2× one dumbbell; machines vary, so lean light and say set 1 checks it). Never tell the lifter to pick their own weight when you can estimate one. After set 1 the engine adapts the rest to what they actually do.",
+    "Changes go through propose_changes: switch (today, trial, or permanent), skip, set count, rep range, exact numbers, reorder, change day. Several changes can go in one proposal. Use scope permanent when they say \"from now on\", \"always\", \"in my program\"; trial when they want to try something. Prefer exercises that load the muscle at long lengths when you're the one choosing.",
     "Evidence you can rely on: about 10+ hard sets per muscle per week, sets taken to roughly 0-3 reps from failure, rest of 90 seconds or more, deloads every 4-6 weeks or when performance drops, adding reps or load both build muscle. Never tell them to train through sharp or joint pain; suggest a pain-free alternative or skipping, and seeing a professional if it persists.",
     "Standing rules are in context.rules. The app enforces them itself: before any workout is shown, a validator swaps avoided exercises, drops near-duplicate exercises, caps sets per movement pattern (6) and per muscle, limits heavy lower-back work, and picks the day by recovery instead of list order. What it changed today is in context.today.checks, and why it chose the day is in context.today.selection. Use those to explain; don't redo their work.",
     "Be proactive: if you see redundant volume, a muscle trained before it recovered, or anything that conflicts with the rules or the goal, say so and propose the fix without waiting to be asked.",
     "When the lifter states a preference or limit about exercises or joints, call add_rule so it sticks. Never say you noted something unless you called add_rule or remember.",
     "Goal: balanced hypertrophy across every trained muscle. context.lastAssessment is how the most recent workout moved them toward it.",
-    "Use remember for durable facts that aren't training rules (equipment, schedule). Don't mention the tools by name.",
+    "Use remember for durable facts that aren't training rules (equipment, schedule). Don't mention the tools by name, and don't describe what the card says; one short line is enough.",
     "",
     "Remembered notes (id: note):",
     memory.length ? memory.map(m => m.key + ": " + m.value.note).join("\n") : "(none yet)",
@@ -576,8 +600,8 @@ function runCoach(ss, body) {
   let model = COACH_MODEL;
   let reply = "";
   for (let turn = 0; turn < 5; turn++) {
-    let res = callClaudeRaw({ model, max_tokens: 1200, system: coachSystem(body.context || {}, memory), tools: COACH_TOOLS, messages });
-    if (res.code === 404 && model !== CLAUDE_MODEL) { model = CLAUDE_MODEL; res = callClaudeRaw({ model, max_tokens: 1200, system: coachSystem(body.context || {}, memory), tools: COACH_TOOLS, messages }); }
+    let res = callClaudeRaw({ model, max_tokens: 2000, system: coachSystem(body.context || {}, memory), tools: COACH_TOOLS, messages });
+    if (res.code === 404 && model !== CLAUDE_MODEL) { model = CLAUDE_MODEL; res = callClaudeRaw({ model, max_tokens: 2000, system: coachSystem(body.context || {}, memory), tools: COACH_TOOLS, messages }); }
     if (res.code !== 200) throw new Error("Claude API error " + res.code + ": " + (res.body.error ? res.body.error.message : "unknown"));
     const content = res.body.content || [];
     const text = content.filter(b => b.type === "text").map(b => b.text).join("\n").trim();

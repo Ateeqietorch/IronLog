@@ -100,3 +100,22 @@ export function saveProgramStorage(storage) {
 export function readProgramStorage() {
   return { exercises: readLocal("il:exercises", null), dayLabels: readLocal("il:dayLabels", {}) };
 }
+
+// Change a slot's set count or rep range in the stored program (coach's
+// permanent changes). patch: { sets?, repRange? }.
+export function updateSlot(program, storage, dayKey, slotIndex, patch) {
+  const exercises = storage?.exercises && Object.keys(storage.exercises).length
+    ? structuredClone(storage.exercises)
+    : Object.fromEntries(program.days.map((d) => [d.key, d.exercises.map((e) => ({
+      name: e.name, sets: e.sets, repMin: e.repRange[0], repMax: e.repRange[1], weight: e.programWeight ?? "",
+    }))]));
+  const dayLabels = { ...(storage?.dayLabels ?? {}) };
+  if (!(storage?.exercises && Object.keys(storage.exercises).length)) for (const d of program.days) dayLabels[d.key] = d.label;
+  const list = exercises[dayKey];
+  if (!list?.[slotIndex]) return null;
+  const s = { ...list[slotIndex] };
+  if (patch.sets >= 1) s.sets = patch.sets;
+  if (Array.isArray(patch.repRange)) { s.repMin = patch.repRange[0]; s.repMax = patch.repRange[1]; }
+  list[slotIndex] = s;
+  return { exercises, dayLabels };
+}
