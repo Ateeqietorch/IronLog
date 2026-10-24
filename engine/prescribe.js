@@ -190,24 +190,44 @@ export function recalcRemaining({ plan, model, models, exercise, loggedSets, loc
   // moves today's numbers noticeably without rewriting the long-term model.
   let m = prepareForSession(baseModel, date);
   m = { ...m, logVar: m.logVar + READINESS_SD ** 2 };
+  // A set taken to within a rep of failure is a direct reading of today's
+  // strength, not noise: today can't be stronger than that set showed.
+  // (The half-step cap and outlier gate in updateModel exist for sets that
+  // might just have been sandbagged; a near-failure set wasn't.)
+  let ceiling = Infinity;
+  let ceilingSet = null;
   for (const s of loggedSets) {
     const eff = toEffective(exercise, Number(s.load), bodyweight);
-    m = updateModel(m, { load: eff, reps: s.reps, rir: s.rir, setIndex: s.index ?? s.setIndex, date }, { gainCap, record: false });
+    const setIndex = s.index ?? s.setIndex;
+    m = updateModel(m, { load: eff, reps: s.reps, rir: s.rir, setIndex, date }, { gainCap, record: false });
+    const rirKnown = s.rir != null && s.rir !== "" && !Number.isNaN(Number(s.rir));
+    if (rirKnown && Number(s.rir) <= 1 && eff > 0 && Number(s.reps) > 0) {
+      const shown = (eff * (1 + (Number(s.reps) + Number(s.rir)) / m.k)) / m.fatigueDecay ** setIndex;
+      if (shown < ceiling) { ceiling = shown; ceilingSet = s; }
+    }
   }
+  if (ceiling < e1rm(m)) m = { ...m, logE1rm: Math.log(ceiling) };
   const done = new Set(loggedSets.map((s) => s.index ?? s.setIndex));
   const lock = new Set(locked);
   const [lo, hi] = repRange;
   const r = plan.reason.rir;
   const E = e1rm(m);
-  let load = plan.load;
+  // Judge the next set against the load you're actually using, not the one
+  // that was planned this morning.
+  const lastDone = [...loggedSets].sort((a, b) => (a.index ?? a.setIndex) - (b.index ?? b.setIndex)).pop();
+  let load = lastDone ? Number(lastDone.load) : plan.load;
   let eff = toEffective(exercise, load, bodyweight);
   const remaining = plan.sets.filter((s) => !done.has(s.index) && !lock.has(s.index));
   if (!remaining.length) return plan;
 
   const nextReps = repsAt(E, eff, m.k, m.fatigueDecay, remaining[0].index, r);
+  let reloaded = false;
   if (nextReps < lo - 2 || nextReps > hi + 3) {
-    const pick = chooseLoad({ E, k: m.k, decay: m.fatigueDecay, rir: r, lo, hi, aim: aimReps(repRange), ladder: ladder ?? ladderFor(exercise, gymProfile), exercise, bodyweight, lastLoad: lastLoad ?? load, setIndex: remaining[0].index });
-    if (pick) { load = pick.logged; eff = pick.eff; }
+    // No one-rung-down floor here: that guards against one bad session
+    // dragging next week's numbers, but within a session the sets you just
+    // did are the evidence. Only the caller's explicit floor applies.
+    const pick = chooseLoad({ E, k: m.k, decay: m.fatigueDecay, rir: r, lo, hi, aim: aimReps(repRange), ladder: ladder ?? ladderFor(exercise, gymProfile), exercise, bodyweight, lastLoad, setIndex: remaining[0].index });
+    if (pick) { reloaded = pick.logged !== load; load = pick.logged; eff = pick.eff; }
   }
   const sets = plan.sets.map((s) => {
     if (done.has(s.index) || lock.has(s.index)) return s;
@@ -215,5 +235,21 @@ export function recalcRemaining({ plan, model, models, exercise, loggedSets, loc
     const changed = reps !== s.reps || load !== s.load;
     return { ...s, load, reps, ...(changed ? { adjusted: true } : {}) };
   });
-  return { ...plan, sets, sessionE1rm: Math.round(E * 10) / 10 };
+  const anyChanged = sets.some((s, i) => s !== plan.sets[i] && s.adjusted);
+  const unit = exercise.loadType === "dumbbell-pair" ? " lb each hand" : " lb";
+  let text = plan.text;
+  if (anyChanged) {
+    const parts = [];
+    if (ceilingSet) parts.push(`${ceilingSet.load}×${ceilingSet.reps} with ${ceilingSet.rir} left puts today's strength at about ${Math.round(E)} lb.`);
+    else parts.push(`Adjusted to how the last set went (today's estimate about ${Math.round(E)} lb).`);
+    const next = sets.find((s) => !done.has(s.index) && !lock.has(s.index));
+    if (next) parts.push(`${reloaded ? "New load: " : "Next: "}${next.load}${unit} for ${next.reps} with ${r} left.`);
+    text = parts.join(" ");
+  }
+  let reason = plan.reason;
+  if (anyChanged && baseModel?.logE1rm != null) {
+    const prevE = Math.exp(baseModel.logE1rm);
+    reason = { ...plan.reason, e1rm: Math.round(E * 10) / 10, changePct: Math.round(((E - prevE) / prevE) * 1000) / 10, load };
+  }
+  return { ...plan, sets, text, reason, sessionE1rm: Math.round(E * 10) / 10 };
 }

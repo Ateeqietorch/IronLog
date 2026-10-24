@@ -211,3 +211,19 @@ test("predictReps matches the curve at the current estimate", () => {
   const p = predictReps(m, { load: loadFor(e1rm(m), 14, m.k), rir: 2, setIndex: 0 });
   assert.ok(Math.abs(p - 12) < 1e-6);
 });
+
+test("in-session: a set to failure well under plan drops the load, past the one-rung floor", () => {
+  const ex = EX["preacher-curl"];
+  // Model says ~85 lb for 10 with 2 left
+  const m = settled(ex.id, loadFor(115, 0, 34), 34, { reps: 10, rir: 2 });
+  const date = iso("2026-08-01", 42);
+  const plan = prescribe({ model: m, exercise: ex, repRange: [8, 12], rir: 2, sets: 3, date, lastLoad: 85 });
+  // Lifter did 75 × 5 with nothing left — strength today is ~86 lb, not ~115
+  const after = recalcRemaining({ plan, model: m, exercise: ex, repRange: [8, 12], date,
+    loggedSets: [{ index: 0, load: 75, reps: 5, rir: 0 }] });
+  assert.ok(after.sets[1].load < 75, `next load should drop below what failed: ${JSON.stringify(after.sets)}`);
+  assert.ok(after.sets[1].reps >= 6, JSON.stringify(after.sets));
+  assert.ok(after.sessionE1rm < 90);
+  assert.match(after.text, /75×5 with 0 left/);
+  assert.ok(after.reason.changePct < 0, "trend shows down, not up");
+});
