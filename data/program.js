@@ -119,3 +119,22 @@ export function updateSlot(program, storage, dayKey, slotIndex, patch) {
   list[slotIndex] = s;
   return { exercises, dayLabels };
 }
+
+// Add an exercise to a day of the stored program (coach's permanent adds).
+// `at` is the program position; past the end appends. Returns
+// { storage, slotIndex } or null if the day isn't there.
+export function insertSlot(program, storage, dayKey, at, ex, { sets = 3, repRange = null } = {}) {
+  const exercises = storage?.exercises && Object.keys(storage.exercises).length
+    ? structuredClone(storage.exercises)
+    : Object.fromEntries(program.days.map((d) => [d.key, d.exercises.map((e) => ({
+      name: e.name, sets: e.sets, repMin: e.repRange[0], repMax: e.repRange[1], weight: e.programWeight ?? "",
+    }))]));
+  const dayLabels = { ...(storage?.dayLabels ?? {}) };
+  if (!(storage?.exercises && Object.keys(storage.exercises).length)) for (const d of program.days) dayLabels[d.key] = d.label;
+  const list = exercises[dayKey];
+  if (!list) return null;
+  const rr = Array.isArray(repRange) ? repRange : ex.defaultRepRange;
+  const slotIndex = Math.max(0, Math.min(Number.isFinite(at) ? at : list.length, list.length));
+  list.splice(slotIndex, 0, { name: ex.name, sets: Math.max(1, Number(sets) || 3), repMin: rr[0], repMax: rr[1], weight: "", unilateral: !!ex.unilateral });
+  return { storage: { exercises, dayLabels }, slotIndex };
+}

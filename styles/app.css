@@ -204,3 +204,16 @@ body:not([data-tab="train"]) .app.resting { padding-bottom: calc(68px + env(safe
 .card.assess.off { border-left: 3px solid var(--warn); }
 .rule-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--line, rgba(255,255,255,.06)); font-size: 15px; }
 .rule-row .mut { font-size: 13px; }
+
+/* notes */
+.note-input { width: 100%; min-height: 84px; resize: vertical; background: var(--iron); color: var(--silver); border: 1px solid var(--seam); border-radius: var(--r-button); padding: 10px 12px; font: inherit; font-size: 16px; line-height: 1.4; }
+.note-input:focus-visible { outline: 2px solid var(--silver); outline-offset: 2px; }
+.note-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.note-chips button { height: 34px; padding: 0 12px; border-radius: 17px; border: 1px solid var(--seam); background: var(--iron); font-size: 13px; color: var(--silver-2); }
+.ex-note { display: flex; gap: 8px; align-items: flex-start; width: 100%; text-align: left; margin-top: 8px; font-size: 13px; line-height: 1.35; color: var(--silver-2); border-left: 2px solid var(--warn); padding: 4px 0 4px 10px; }
+.ex-note .ti { font-size: 15px; color: var(--warn); margin-top: 1px; }
+.stopped { color: var(--warn); }
+.note-label { font-size: 13px; color: var(--steel); margin: 12px 0 6px; }
+.h-session { display: block; width: 100%; text-align: left; }
+.h-note { font-size: 13px; color: var(--silver-2); }
+.h-note .ti { color: var(--warn); }

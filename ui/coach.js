@@ -29,7 +29,11 @@ export function buildContext() {
       plan: e.plan?.sets?.map((x) => `${x.load}x${x.reps}@${x.rir}RIR`), reason: e.plan?.text, estimate: e.plan?.reason?.e1rm,
       logged: e.logged.map((l) => `${l.load}x${typeof l.reps === "object" ? `L${l.reps.L}/R${l.reps.R}` : l.reps}@${l.rir}RIR`),
       switchedFrom: e.switchedFrom,
+      ...(e.userNote ? { note: e.userNote } : {}),
+      ...(e.stopped ? { stopped: `ended after ${e.logged.length} of ${e.stopped.of} sets` } : {}),
+      ...(e.added ? { addedByCoach: true } : {}),
     })),
+    ...(s.workoutNote ? { note: s.workoutNote } : {}),
     current: s.cur,
     selection: s.selection ?? null,
     checks: (s.adjustments ?? []).map((n) => n.text),
@@ -39,11 +43,17 @@ export function buildContext() {
   const bySession = new Map();
   for (const r of state.rows) {
     const k = r.sessionKey || `${r.date}_${r.day}`;
-    if (!bySession.has(k)) bySession.set(k, { date: r.date, day: r.day, sets: [] });
-    bySession.get(k).sets.push(`${r.exercise} ${r.weight}x${r.reps}${r.rpe ? "@RPE" + r.rpe : ""}`);
+    if (!bySession.has(k)) bySession.set(k, { date: r.date, day: r.day, sets: [], notes: {}, note: "" });
+    const b = bySession.get(k);
+    b.sets.push(`${r.exercise} ${r.weight}x${r.reps}${r.rpe ? "@RPE" + r.rpe : ""}`);
+    if (r.notes && String(r.notes).trim()) b.notes[r.exercise] = String(r.notes).trim();
+    if (r.sessionNote && !b.note) b.note = String(r.sessionNote).trim();
   }
+  // The lifter's notes ride along so the coach knows about a tweak or why
+  // a workout was cut short.
   const recent = [...bySession.values()].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 4)
-    .map((x) => ({ date: x.date, day: x.day, sets: x.sets.slice(0, 24) }));
+    .map((x) => ({ date: x.date, day: x.day, sets: x.sets.slice(0, 24),
+      ...(Object.keys(x.notes).length ? { exerciseNotes: x.notes } : {}), ...(x.note ? { note: x.note } : {}) }));
 
   const strength = Object.entries(state.models).filter(([, m]) => m.logE1rm != null)
     .map(([k, m]) => ({ id: k.split("|")[0], side: k.split("|")[1], e1rm: Math.round(e1rm(m)), last: m.lastExposure, sessions: m.exposures }))
@@ -69,6 +79,7 @@ export function buildContext() {
 
 const PROMPTS = [
   "I only have 40 minutes today",
+  "Add another biceps exercise today",
   "Why is the weight lighter today?",
   "Something hurts on this exercise",
   "The machine is taken, what should I do instead?",
@@ -99,7 +110,7 @@ export function renderCoach(root) {
     const [i, j] = b.dataset.apply.split(":").map(Number);
     const p = thread[i].proposals[j];
     const problems = p.changes.map((c) => validateChange(state.session, c, state.index, state.program)
-      ?? (c.type === "switch_exercise" && isAvoided(state.index.byId.get(c.toExerciseId), active(state.constraints)) ? "That exercise is on your avoid list." : null)).filter(Boolean);
+      ?? ((c.type === "switch_exercise" || c.type === "add_exercise") && isAvoided(state.index.byId.get(c.toExerciseId), active(state.constraints)) ? "That exercise is on your avoid list." : null)).filter(Boolean);
     if (problems.length) { toast(problems[0]); return; }
     const failed = applyProposal(p.changes);
     if (failed.length) toast(failed[0]);
@@ -165,8 +176,10 @@ async function send(root, text) {
     const named = (c) => {
       const e = state.session?.exercises?.[c.exerciseIndex];
       const fromName = e ? (e.ex?.name ?? e.name) : undefined;
-      const toName = c.type === "switch_exercise" ? (c.newExercise?.name ?? state.index.byId.get(c.toExerciseId)?.name) : undefined;
-      return { ...c, ...(fromName ? { fromName } : {}), ...(toName ? { toName } : {}) };
+      const toName = c.type === "switch_exercise" || c.type === "add_exercise" ? (c.newExercise?.name ?? state.index.byId.get(c.toExerciseId)?.name) : undefined;
+      const before = c.type === "add_exercise" && c.toPosition != null ? state.session?.exercises?.[c.toPosition] : null;
+      const beforeName = before ? (before.ex?.name ?? before.name) : undefined;
+      return { ...c, ...(fromName && c.type !== "add_exercise" ? { fromName } : {}), ...(toName ? { toName } : {}), ...(beforeName ? { beforeName } : {}) };
     };
     const proposals = (d.proposals ?? []).map((p) => ({ ...p, changes: (p.changes ?? []).map(named), status: null }));
     thread.push({ role: "assistant", content: d.reply || (proposals.length ? "Here's what I'd change:" : "Noted."), proposals });

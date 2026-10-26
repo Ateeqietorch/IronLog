@@ -72,3 +72,12 @@ Supersedes the 2026-10-15 "coach never sets loads or reps, today only" decision.
 - **The coach can set exact numbers** (`set_numbers`, or `numbers` on a switch), estimating from related lifts when there's no history. If there's no model yet, set 1 seeds one. Sets done as planned keep the coach's numbers; a set that goes differently hands the rest back to the engine.
 - **Long-term changes:** switch, set count and rep range take `scope: today | trial | permanent`; trial and permanent update the program the same way the Switch sheet does.
 - **Proposal cards pin exercise names when they arrive**, so an applied card no longer reads "Swap X for X".
+
+## Notes and coach adds — 2026-10-26
+Ateeq stopped single-leg press after two sets (left adductor) and the log just looked unfinished.
+- **Notes live in the sheet.** Exercise notes go in the existing Notes column (G) on every set of that exercise; the workout note goes in a new column Q on every row. No backend change: `replace_session` already pads extra columns.
+- **Ending an exercise early is a first-class action.** "End exercise here" (or "Skip exercise") takes a reason, marks it done with the sets logged, and writes "Stopped after 2 of 3 sets: <reason>". "Finish early" asks why and marks what's left as stopped. Resume undoes it.
+- **Past workouts can get notes** from History; the session is re-saved with every other column intact.
+- **The engine's own `note` (e.g. "No history yet…") is kept separate** from the lifter's (`userNote`) so it never lands in the log.
+- **Coach `add_exercise`:** adds without swapping, today or permanent (inserted into the program day at the matching spot; later slots and their trials shift down one). A today-only add has `slotIndex -1`, so a later "permanent" change to it can't rewrite another slot.
+- **The coach sees notes** (today's and the last 4 workouts') and is told a pain note means adjust, not repeat.

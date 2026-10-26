@@ -5,8 +5,8 @@ import { CURATED } from "../engine/seed/curated.js";
 import { replayHistory } from "../engine/replay.js";
 import { mesoWeek } from "../engine/meso.js";
 import { tables } from "../data/sheets.js";
-import { readLog, readBodyweight, writeSession, dedupeLog } from "../data/log.js";
-import { loadProgram, replaceSlot, updateSlot, saveProgramStorage, readProgramStorage } from "../data/program.js";
+import { readLog, readBodyweight, writeSession, dedupeLog, rowToObject, objectToRow } from "../data/log.js";
+import { loadProgram, replaceSlot, updateSlot, insertSlot, saveProgramStorage, readProgramStorage } from "../data/program.js";
 import { newTrial, applyTrials, recordSession, resolveTrial } from "../data/trials.js";
 import { buildSession, toRows, applyChanges } from "./session.js";
 import { validateDay } from "../engine/validate.js";
@@ -224,7 +224,7 @@ export async function finishSession({ fixture = false } = {}) {
   if (inFlight) return { ok: false, msg: "Saving…" };
   const rows = toRows(s);
   if (!rows.length) return { ok: false, msg: "Nothing logged yet" };
-  const rowsObj = rows.map((r) => ({ date: r[0], day: r[1], exercise: r[2], set: r[3], weight: r[4], reps: r[5], notes: r[6], sessionKey: r[7], rpe: r[8], completed: r[9], exerciseId: r[10] }));
+  const rowsObj = rows.map(rowToObject);
   state.rows = [...state.rows.filter((r) => r.sessionKey !== s.sessionKey), ...rowsObj];
   rebuildModels();
   // Mark it saved and keep a pending copy before the network call, so a
@@ -248,6 +248,33 @@ export async function finishSession({ fixture = false } = {}) {
   onFinish.forEach((f) => { try { f(s); } catch { /* ignore */ } });
   emit();
   return { ok: true, pending: state.sync === "pending" };
+}
+
+// Add or change notes on a workout that's already saved (History). Every set
+// is re-written with its other columns intact, so only the notes change.
+// exerciseNotes: { [exercise name]: text }, sessionNote: text.
+export async function updateSessionNotes(sessionKey, { exerciseNotes = {}, sessionNote = "" } = {}) {
+  const mine = state.rows.filter((r) => r.sessionKey === sessionKey);
+  if (!mine.length) return { ok: false, msg: "That workout isn't in your log" };
+  const updated = mine.map((r) => ({
+    ...r,
+    notes: Object.prototype.hasOwnProperty.call(exerciseNotes, r.exercise) ? String(exerciseNotes[r.exercise] ?? "").trim() : r.notes,
+    sessionNote: String(sessionNote ?? "").trim(),
+  }));
+  const rows = updated.map(objectToRow);
+  state.rows = [...state.rows.filter((r) => r.sessionKey !== sessionKey), ...updated];
+  ls.set(K.log, state.rows);
+  // Same safety net as finishing a workout: pending until the sheet confirms.
+  addPending({ sessionKey, rows, rowsObj: updated });
+  emit();
+  try {
+    await save(sessionKey, rows);
+    dropPending(sessionKey, rows);
+    return { ok: true, pending: false };
+  } catch {
+    state.sync = "pending"; emit();
+    return { ok: true, pending: true };
+  }
 }
 
 // Hooks run after a workout is finished.
@@ -280,7 +307,7 @@ export function applyProposal(changes) {
   const today = [];
   for (const raw of changes) {
     const c = { ...raw };
-    if (c.type === "switch_exercise" && c.newExercise && !state.index.byId.has(c.toExerciseId)) {
+    if ((c.type === "switch_exercise" || c.type === "add_exercise") && c.newExercise && !state.index.byId.has(c.toExerciseId)) {
       const r = exerciseFromSpec(c.newExercise, state.index);
       if (!r.ex) { problems.push(`Couldn't add ${c.newExercise.name}: ${r.problems[0]}`); continue; }
       addExercise(r.ex);
@@ -289,6 +316,10 @@ export function applyProposal(changes) {
     if (c.type === "switch_exercise" && (c.scope === "trial" || c.scope === "permanent")) {
       const to = state.index.byId.get(c.toExerciseId);
       if (to) Object.assign(c, recordSwitch(c.exerciseIndex, to, c.scope, { sessions: c.trialSessions ?? 3 }));
+    }
+    if (c.type === "add_exercise" && c.scope === "permanent") {
+      const ex = state.index.byId.get(c.toExerciseId);
+      if (ex) Object.assign(c, addToProgram(ex, c));
     }
     if ((c.type === "set_count" || c.type === "rep_range") && c.scope === "permanent") {
       const s = state.session;
@@ -300,6 +331,26 @@ export function applyProposal(changes) {
   }
   if (today.length) setSession(applyChanges(state.session, today, { index: state.index, models: state.models }), { undoable: true });
   return problems;
+}
+
+// Put a coach-added exercise into today's program day, at the spot matching
+// where it goes in today's workout. Exercises after it (and their trials)
+// move down one program slot. Returns { slotIndex } for the session entry.
+function addToProgram(ex, c) {
+  const s = state.session;
+  if (!s) return {};
+  const pos = c.toPosition != null ? Number(c.toPosition) : s.exercises.length;
+  const after = s.exercises.slice(Math.max(0, pos)).find((e) => (e.slotIndex ?? -1) >= 0);
+  const at = after ? after.slotIndex : Infinity;
+  const n = Array.isArray(c.numbers) && c.numbers.length ? c.numbers.length : c.sets;
+  const r = insertSlot(state.program, readProgramStorage(), s.dayKey, at, ex, { sets: n, repRange: c.repRange });
+  if (!r) return {};
+  saveProgramStorage(r.storage);
+  state.program = loadProgram(state.index);
+  for (const e of s.exercises) if ((e.slotIndex ?? -1) >= r.slotIndex) e.slotIndex += 1;
+  const moved = state.trials.map((t) => (t.dayKey === s.dayKey && t.slotIndex >= r.slotIndex ? { ...t, slotIndex: t.slotIndex + 1 } : t));
+  if (moved.some((t, i) => t !== state.trials[i])) setTrials(moved);
+  return { slotIndex: r.slotIndex };
 }
 
 // ── Switching exercises (Today / Trial / Permanent) ────────────────────────

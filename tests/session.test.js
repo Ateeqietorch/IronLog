@@ -74,7 +74,7 @@ test("rows keep the v2 columns and add planned-vs-actual", () => {
   assert.deepEqual(row.slice(0, 10), ["2026-09-29", "Push A", "Incline Dumbbell Press", 1, t.load, t.reps, "", "2026-09-29_Push A", "8", "1"]);
   assert.equal(row[10], "incline-dumbbell-press");
   assert.equal(row[11], t.load);
-  assert.equal(row.length, 16);
+  assert.equal(row.length, 17); // + Q, the workout note
 });
 
 test("unilateral sets are written in the v2 L/R format", () => {

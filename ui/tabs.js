@@ -1,7 +1,7 @@
 // History, Progress, Coach, and Settings (DESIGN-SPEC.md §4, §5.8, §5.9).
-import { state, setSettings, newBlock } from "./store.js";
+import { state, setSettings, newBlock, updateSessionNotes } from "./store.js";
 import { e1rm } from "../engine/model.js";
-import { esc, sheet, fmtDate, setHaptics, toast } from "./dom.js";
+import { esc, sheet, closeSheet, fmtDate, setHaptics, toast } from "./dom.js";
 
 const gear = `<button class="icon-btn" id="settings-btn" aria-label="Settings"><i class="ti ti-settings" aria-hidden="true"></i></button>`;
 
@@ -11,8 +11,9 @@ export function renderHistory(root) {
   const bySession = new Map();
   for (const r of state.rows) {
     const k = r.sessionKey || `${r.date}_${r.day}`;
-    if (!bySession.has(k)) bySession.set(k, { date: r.date, day: String(r.day).replace(/ \(Override\)$/, ""), ex: new Map() });
+    if (!bySession.has(k)) bySession.set(k, { key: k, keyed: !!r.sessionKey, date: r.date, day: String(r.day).replace(/ \(Override\)$/, ""), ex: new Map(), note: "" });
     const s = bySession.get(k);
+    if (r.sessionNote && !s.note) s.note = String(r.sessionNote);
     if (!s.ex.has(r.exercise)) s.ex.set(r.exercise, []);
     s.ex.get(r.exercise).push(r);
   }
@@ -22,12 +23,41 @@ export function renderHistory(root) {
     const items = [...s.ex].map(([name, sets]) => {
       const working = sets.filter((x) => Number(String(x.weight).replace(/[^\d.]/g, "")) > 0 || String(x.weight).includes("L:"));
       const best = working.sort((a, b) => (parseFloat(String(b.weight).replace(/^L:/, "")) || 0) - (parseFloat(String(a.weight).replace(/^L:/, "")) || 0))[0];
-      return `<div class="row"><span>${esc(name)}</span><span class="r">${working.length} sets${best ? ` · ${esc(best.weight)} × ${esc(best.reps)}` : ""}</span></div>`;
+      const note = sets.map((x) => String(x.notes ?? "").trim()).find(Boolean);
+      return `<div class="row"><span>${esc(name)}${note ? `<br><span class="h-note"><i class="ti ti-note" aria-hidden="true"></i> ${esc(note)}</span>` : ""}</span><span class="r">${working.length} sets${best ? ` · ${esc(best.weight)} × ${esc(best.reps)}` : ""}</span></div>`;
     }).join("");
-    return `<div class="group-title">${esc(fmtDate(s.date))} · ${esc(label(s.day))}</div><div class="rows">${items}</div>`;
+    const head = `${esc(fmtDate(s.date))} · ${esc(label(s.day))}`;
+    return `<div class="group-title" style="display:flex;justify-content:space-between;align-items:center">${head}${s.keyed ? `<button class="link" style="margin:0;min-height:32px;padding:4px 6px" data-notes="${esc(s.key)}"><i class="ti ti-note" aria-hidden="true"></i> ${s.note || [...s.ex.values()].some((x) => x.some((y) => y.notes)) ? "Edit notes" : "Add notes"}</button>` : ""}</div>
+      <div class="rows">${s.note ? `<div class="h-note" style="padding:10px 0;border-bottom:1px solid var(--seam)"><i class="ti ti-note" aria-hidden="true"></i> ${esc(s.note)}</div>` : ""}${items}</div>`;
   }).join("");
   root.innerHTML = `<header class="p-head"><h1>History</h1>${gear}</header>${blocks || `<div class="empty">Your logged workouts show up here.</div>`}<div style="height:16px"></div>`;
   root.querySelector("#settings-btn").onclick = settingsSheet;
+  root.querySelectorAll("[data-notes]").forEach((b) => b.addEventListener("click", () => {
+    const s = sessions.find((x) => x.key === b.dataset.notes);
+    if (s) historyNotesSheet(s, label(s.day));
+  }));
+}
+
+// Notes on a workout that's already saved: one per exercise plus one for
+// the whole workout. Re-saves that workout's sets with the new notes.
+function historyNotesSheet(s, dayLabel) {
+  const names = [...s.ex.keys()];
+  const noteOf = (name) => s.ex.get(name).map((x) => String(x.notes ?? "").trim()).find(Boolean) ?? "";
+  const fields = names.map((name, i) => `<div class="note-label">${esc(name)} <span class="mut">· ${s.ex.get(name).length} sets</span></div>
+    <textarea class="note-input" data-ex="${i}" maxlength="300" style="min-height:56px" placeholder="e.g. stopped after 2 sets, left adductor">${esc(noteOf(name))}</textarea>`).join("");
+  const el = sheet(`<h2>Notes</h2><div class="sub">${esc(fmtDate(s.date))} · ${esc(dayLabel)}. Your coach sees these.</div>
+    <div class="note-label" style="margin-top:0">Whole workout</div>
+    <textarea class="note-input" id="h-wnote" maxlength="300" style="min-height:56px" placeholder="e.g. finished the rest of this the next day">${esc(s.note)}</textarea>
+    ${fields}
+    <button class="primary" id="h-save"><i class="ti ti-check" aria-hidden="true"></i>Save notes</button>`);
+  el.querySelector("#h-save").addEventListener("click", async (ev) => {
+    ev.currentTarget.disabled = true;
+    const exerciseNotes = {};
+    el.querySelectorAll("[data-ex]").forEach((t) => { exerciseNotes[names[Number(t.dataset.ex)]] = t.value; });
+    const r = await updateSessionNotes(s.key, { exerciseNotes, sessionNote: el.querySelector("#h-wnote").value });
+    closeSheet();
+    toast(!r.ok ? r.msg : r.pending ? "Saved on this phone, will sync" : "Notes saved");
+  });
 }
 
 export function renderProgress(root) {

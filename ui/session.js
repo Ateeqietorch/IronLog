@@ -156,17 +156,69 @@ export function nextUndone(s, from) {
 export const sessionDone = (s) => s.exercises.every(isDone);
 export const anyLogged = (s) => s.exercises.some((e) => e.logged.length);
 
-// Sheet rows: v2 columns A–J (unchanged) + v3 columns K–P.
+// What goes in the Notes column for an exercise: the lifter's note, and
+// "Stopped after 2 of 3 sets" when they ended it early, so a short exercise
+// reads as a decision rather than an unfinished workout.
+export function exerciseNoteText(e) {
+  const note = String(e.userNote ?? "").trim();
+  const stop = e.stopped && e.logged.length ? `Stopped after ${e.logged.length} of ${e.stopped.of} sets` : "";
+  return stop && note ? `${stop}: ${note}` : stop || note;
+}
+
+// The workout note, plus a line for any exercise stopped before its first
+// set (it has no rows of its own to carry a note).
+export function sessionNoteText(s) {
+  const parts = [String(s.workoutNote ?? "").trim()];
+  for (const e of s.exercises) {
+    if (e.stopped && !e.logged.length) parts.push(`Skipped ${e.ex?.name ?? e.name}${e.userNote ? `: ${String(e.userNote).trim()}` : ""}`);
+  }
+  return parts.filter(Boolean).join(" · ");
+}
+
+// End an exercise with the sets done so far (or skip it if none), with an
+// optional reason. It then counts as done, so the workout can finish clean.
+export function stopExercise(session, exIdx, note = null) {
+  const s = structuredClone(session);
+  const e = s.exercises[exIdx];
+  if (!e) return s;
+  e.stopped = { of: e.stopped?.of ?? e.sets };
+  if (note != null) e.userNote = String(note).trim();
+  e.sets = e.logged.length;
+  if (isDone(e) && s.cur === exIdx) s.cur = nextUndone(s, exIdx);
+  return s;
+}
+
+// Undo a stop: the exercise gets its original set count back.
+export function resumeExercise(session, exIdx) {
+  const s = structuredClone(session);
+  const e = s.exercises[exIdx];
+  if (!e?.stopped) return s;
+  e.sets = Math.max(e.stopped.of, e.logged.length + 1);
+  delete e.stopped;
+  s.cur = exIdx;
+  return s;
+}
+
+export function setExerciseNote(session, exIdx, note) {
+  const s = structuredClone(session);
+  if (s.exercises[exIdx]) s.exercises[exIdx].userNote = String(note ?? "").trim();
+  return s;
+}
+
+// Sheet rows: v2 columns A–J (unchanged) + v3 columns K–P, + Q workout note.
+// Notes (G) carries the exercise note on each of its sets.
 export function toRows(s) {
   const rows = [];
+  const sNote = sessionNoteText(s);
   for (const e of s.exercises) {
+    const note = exerciseNoteText(e);
     for (const l of e.logged) {
       const uni = typeof l.reps === "object";
       const weight = uni ? `L:${l.load}/R:${l.load}` : l.load;
       const reps = uni ? `L:${l.reps.L}/R:${l.reps.R}` : l.reps;
       const rpe = l.rir == null ? "" : String(Math.max(0, 10 - l.rir));
-      rows.push([s.date, s.dayKey, e.name, l.index + 1, weight, reps, "", s.sessionKey, rpe, "1",
-        e.ex?.id ?? "", l.plannedLoad ?? "", l.plannedReps ?? "", l.plannedRir ?? "", "", ENGINE_VERSION]);
+      rows.push([s.date, s.dayKey, e.name, l.index + 1, weight, reps, note, s.sessionKey, rpe, "1",
+        e.ex?.id ?? "", l.plannedLoad ?? "", l.plannedReps ?? "", l.plannedRir ?? "", "", ENGINE_VERSION, sNote]);
     }
   }
   return rows;
@@ -197,6 +249,12 @@ export function describeChange(s, c, index) {
       const to = c.toName ?? c.newExercise?.name ?? index.byId.get(c.toExerciseId)?.name ?? c.toExerciseId;
       return `Swap ${from} for ${to} (${scope})${c.numbers?.length ? `: ${nums(c.numbers)}` : ""}`;
     }
+    case "add_exercise": {
+      const to = c.toName ?? c.newExercise?.name ?? index.byId.get(c.toExerciseId)?.name ?? c.toExerciseId;
+      const n = c.numbers?.length || c.sets || 3;
+      const where = c.toPosition != null && c.toPosition < s.exercises.length ? `, before ${c.beforeName ?? name(c.toPosition)}` : "";
+      return `Add ${to}: ${c.numbers?.length ? nums(c.numbers) : `${n} sets`}${where} (${c.scope === "permanent" ? "today and in your program" : "today only"})`;
+    }
     case "skip_exercise": return `Skip ${from}`;
     case "set_count": return `${from}: ${c.sets} sets (${scope})`;
     case "rep_range": return `${from}: ${c.repRange?.[0]}–${c.repRange?.[1]} reps (${scope})`;
@@ -210,6 +268,12 @@ export function describeChange(s, c, index) {
 export function validateChange(s, c, index, program) {
   const e = s.exercises[c.exerciseIndex];
   if (c.type === "change_day") return program.days.some((d) => d.key === c.dayKey) ? null : "That day isn't in your program.";
+  if (c.type === "add_exercise") {
+    if (!c.newExercise && !index.byId.has(c.toExerciseId)) return "That exercise isn't in the catalog.";
+    if (c.numbers && !validNumbers(c.numbers)) return "Those sets need a weight and reps each.";
+    if (c.repRange && !(Array.isArray(c.repRange) && c.repRange[0] >= 1 && c.repRange[1] >= c.repRange[0])) return "Invalid rep range.";
+    return null;
+  }
   if (!e) return "That exercise isn't in today's workout.";
   if (c.type === "switch_exercise") {
     if (!c.newExercise && !index.byId.has(c.toExerciseId)) return "That exercise isn't in the catalog.";
@@ -262,6 +326,22 @@ export function applyChanges(session, changes, { index, models }) {
       if (e.logged.length) e.sets = e.logged.length;
       else s.exercises.splice(c.exerciseIndex, 1);
     }
+  }
+  // Additions after everything that refers to today's positions.
+  for (const c of changes.filter((x) => x.type === "add_exercise")) {
+    const ex = index.byId.get(c.toExerciseId);
+    if (!ex) continue;
+    const n = validNumbers(c.numbers) ? c.numbers.length : Math.max(1, Math.min(8, Number(c.sets) || 3));
+    const slot = {
+      name: ex.name, exerciseId: ex.id, sets: n, repRange: Array.isArray(c.repRange) ? c.repRange : ex.defaultRepRange,
+      unilateral: !!ex.unilateral, programWeight: null,
+    };
+    // slotIndex -1 = not in the program, so a later "permanent" change to it
+    // can't rewrite some other slot. A permanent add gets its real index.
+    let fresh = { ...replan({ logged: [] }, slot), logged: [], slotIndex: c.slotIndex ?? -1, added: true };
+    if (validNumbers(c.numbers)) fresh = coachNumbers(fresh, c.numbers, { bodyweight: s.bodyweight, note: c.note });
+    const at = c.toPosition != null ? Math.max(0, Math.min(Number(c.toPosition), s.exercises.length)) : s.exercises.length;
+    s.exercises.splice(at, 0, fresh);
   }
   for (const c of changes.filter((x) => x.type === "move_exercise")) {
     const [moved] = s.exercises.splice(c.exerciseIndex, 1);

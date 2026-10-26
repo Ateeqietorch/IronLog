@@ -2,7 +2,7 @@
 import { state, setSession, startDay, finishSession, hasPending, undo, isSaving, reviewTrial, suggestNext, today } from "./store.js";
 import { switchSheet } from "./switch.js";
 import { inReview, trialSummary } from "../data/trials.js";
-import { logSet, target, isDone, sessionDone, anyLogged, stepLoad } from "./session.js";
+import { logSet, target, isDone, sessionDone, anyLogged, stepLoad, stopExercise, resumeExercise, setExerciseNote } from "./session.js";
 import { statusLine } from "../engine/meso.js";
 import { esc, sheet, closeSheet, toast, buzz } from "./dom.js";
 import { startRest } from "./rest.js";
@@ -111,13 +111,22 @@ function nowCard(s, e) {
     <div class="units"><span style="min-width:120px">${unitsFor(e.ex)}</span><span>reps</span></div>`}
     ${reasonText ? `<button class="reason" id="why"><i class="ti ${icon}" aria-hidden="true"></i><span>${esc(reasonText)}</span></button>` : ""}
     <div class="sets">${rows}</div>
-    ${done ? "" : `
+    ${e.stopped ? `<div class="label stopped"><i class="ti ti-hand-stop" aria-hidden="true"></i> ${e.logged.length ? `Stopped after ${e.logged.length} of ${e.stopped.of} sets` : "Skipped"}</div>` : ""}
+    ${e.userNote ? `<button class="ex-note" id="note-btn" aria-label="Edit note"><i class="ti ti-note" aria-hidden="true"></i><span>${esc(e.userNote)}</span></button>` : ""}
+    ${done ? `<div class="card-links">
+      <button class="link" id="note-btn2"><i class="ti ti-note" aria-hidden="true"></i>${e.userNote ? "Edit note" : "Add note"}</button>
+      ${e.stopped ? `<button class="link" id="resume-btn"><i class="ti ti-player-play" aria-hidden="true"></i>Resume</button>` : "<span></span>"}
+    </div>` : `
     <div class="label">Reps left in the tank</div>
     <div class="chips" role="group" aria-label="Reps left in the tank">${chips}</div>
     <button class="primary" id="log-btn"><i class="ti ti-check" aria-hidden="true"></i>${btnLabel}</button>
     <div class="card-links">
       ${manualFirst ? "<span></span>" : `<button class="link" id="edit-btn"><i class="ti ti-pencil" aria-hidden="true"></i>Edit set</button>`}
       <button class="link" id="switch-btn"><i class="ti ti-arrows-exchange" aria-hidden="true"></i>Switch exercise</button>
+    </div>
+    <div class="card-links">
+      ${e.userNote ? "<span></span>" : `<button class="link" id="note-btn2"><i class="ti ti-note" aria-hidden="true"></i>Add note</button>`}
+      <button class="link" id="stop-btn"><i class="ti ti-hand-stop" aria-hidden="true"></i>${e.logged.length ? "End exercise here" : "Skip exercise"}</button>
     </div>`}
   </section>`;
 }
@@ -126,8 +135,8 @@ function upNext(s) {
   const items = s.exercises.map((x, i) => {
     if (i === s.cur) return "";
     const p = x.plan?.sets?.[x.logged.length] ?? x.plan?.sets?.[0];
-    const right = isDone(x) ? `${x.logged.length} sets` : p ? `${x.sets} × ${p.reps} · ${fmt(p.load)}` : `${x.sets} sets`;
-    return `<button data-jump="${i}" class="${isDone(x) ? "done-row" : ""}"><span>${isDone(x) ? `<i class="ti ti-circle-check" aria-hidden="true"></i>` : ""}${esc(x.ex?.name ?? x.name)}</span><span class="mut">${right}</span></button>`;
+    const right = x.stopped ? (x.logged.length ? `stopped · ${x.logged.length} of ${x.stopped.of}` : "skipped") : isDone(x) ? `${x.logged.length} sets` : p ? `${x.sets} × ${p.reps} · ${fmt(p.load)}` : `${x.sets} sets`;
+    return `<button data-jump="${i}" class="${isDone(x) ? "done-row" : ""}"><span>${x.stopped ? `<i class="ti ti-hand-stop stopped" aria-hidden="true"></i>` : isDone(x) ? `<i class="ti ti-circle-check" aria-hidden="true"></i>` : ""}${esc(x.ex?.name ?? x.name)}${x.userNote ? ` <i class="ti ti-note mut" aria-label="has a note"></i>` : ""}</span><span class="mut">${right}</span></button>`;
   }).join("");
   return items ? `<section class="next"><h2>Up next</h2>${items}</section>` : "";
 }
@@ -152,8 +161,10 @@ function reviewCards() {
 
 function finishBlock(s) {
   if (isSaving()) return `<div class="finish"><button class="primary" disabled><i class="ti ti-loader" aria-hidden="true"></i>Saving…</button></div>`;
-  if (sessionDone(s)) return `<div class="finish"><button class="primary" id="finish-btn"><i class="ti ti-flag" aria-hidden="true"></i>Finish workout</button></div>`;
-  if (anyLogged(s)) return `<div class="finish"><button class="secondary" id="finish-btn">Finish early and save</button></div>`;
+  const noteLink = `<button class="link" id="wnote-btn"><i class="ti ti-note" aria-hidden="true"></i> ${s.workoutNote ? "Edit workout note" : "Add a workout note"}</button>`;
+  const noteLine = s.workoutNote ? `<button class="ex-note" id="wnote-show" aria-label="Edit workout note"><i class="ti ti-note" aria-hidden="true"></i><span>${esc(s.workoutNote)}</span></button>` : "";
+  if (sessionDone(s)) return `<div class="finish">${noteLine}<button class="primary" id="finish-btn"><i class="ti ti-flag" aria-hidden="true"></i>Finish workout</button>${noteLink}</div>`;
+  if (anyLogged(s)) return `<div class="finish">${noteLine}<button class="secondary" id="finish-early">Finish early and save</button>${noteLink}</div>`;
   return "";
 }
 
@@ -235,6 +246,89 @@ function bind(root, s) {
   });
   root.querySelector("#finish-btn")?.addEventListener("click", async (ev) => {
     ev.currentTarget.disabled = true;
+    const r = await finishSession();
+    if (!r.ok) toast(r.msg);
+  });
+  root.querySelector("#finish-early")?.addEventListener("click", finishEarlySheet);
+  root.querySelector("#note-btn")?.addEventListener("click", () => noteSheet(s.cur));
+  root.querySelector("#note-btn2")?.addEventListener("click", () => noteSheet(s.cur));
+  root.querySelector("#stop-btn")?.addEventListener("click", () => stopSheet(s.cur));
+  root.querySelector("#resume-btn")?.addEventListener("click", () => { setSession(resumeExercise(state.session, s.cur), { undoable: true }); toast("Back on"); });
+  root.querySelector("#wnote-btn")?.addEventListener("click", workoutNoteSheet);
+  root.querySelector("#wnote-show")?.addEventListener("click", workoutNoteSheet);
+}
+
+// ── Notes ──────────────────────────────────────────────────────────────────
+const REASONS = ["Pain or discomfort", "Out of time", "Too fatigued", "Equipment taken", "Felt off"];
+
+function noteBox(value, placeholder) {
+  return `<textarea class="note-input" id="note-text" maxlength="300" placeholder="${esc(placeholder)}">${esc(value ?? "")}</textarea>`;
+}
+
+function bindChips(el) {
+  el.querySelectorAll("[data-reason]").forEach((b) => b.addEventListener("click", () => {
+    const t = el.querySelector("#note-text");
+    t.value = t.value.trim() ? `${t.value.trim()}, ${b.dataset.reason.toLowerCase()}` : b.dataset.reason;
+    t.focus();
+  }));
+}
+
+function noteSheet(exIdx) {
+  const e = state.session.exercises[exIdx];
+  const el = sheet(`<h2>Note</h2><div class="sub">${esc(e.ex?.name ?? e.name)} · saved with these sets in your log, and your coach sees it</div>
+    ${noteBox(e.userNote, "e.g. left adductor felt strained on set 2")}
+    <button class="primary" id="note-save"><i class="ti ti-check" aria-hidden="true"></i>Save note</button>`);
+  el.querySelector("#note-save").addEventListener("click", () => {
+    setSession(setExerciseNote(state.session, exIdx, el.querySelector("#note-text").value));
+    closeSheet(); toast("Note saved");
+  });
+}
+
+function stopSheet(exIdx) {
+  const e = state.session.exercises[exIdx];
+  const n = e.logged.length;
+  const el = sheet(`<h2>${n ? `End ${esc(e.ex?.name ?? e.name)} at ${n} ${n === 1 ? "set" : "sets"}?` : `Skip ${esc(e.ex?.name ?? e.name)}?`}</h2>
+    <div class="sub">${n ? `It counts as done with ${n} of ${e.sets} sets, and the reason goes in your log.` : "The reason goes in your workout note."} Your coach sees it too.</div>
+    <div class="note-chips">${REASONS.map((r) => `<button data-reason="${esc(r)}">${esc(r)}</button>`).join("")}</div>
+    ${noteBox(e.userNote, "What happened? e.g. left adductor felt like it was going to tear")}
+    <button class="primary" id="stop-save"><i class="ti ti-hand-stop" aria-hidden="true"></i>${n ? "End exercise" : "Skip exercise"}</button>`);
+  bindChips(el);
+  el.querySelector("#stop-save").addEventListener("click", () => {
+    const next = stopExercise(state.session, exIdx, el.querySelector("#note-text").value);
+    closeSheet();
+    setSession(next, { undoable: true });
+    toast(n ? `${e.ex?.name ?? e.name} ended at ${n} ${n === 1 ? "set" : "sets"}` : `${e.ex?.name ?? e.name} skipped`, { label: "Undo", fn: () => { undo(); toast("Back on"); } });
+  });
+}
+
+function workoutNoteSheet() {
+  const el = sheet(`<h2>Workout note</h2><div class="sub">How today went overall. Saved with the workout; your coach sees it.</div>
+    ${noteBox(state.session.workoutNote, "e.g. finished yesterday's legs today, short on sleep")}
+    <button class="primary" id="wnote-save"><i class="ti ti-check" aria-hidden="true"></i>Save note</button>`);
+  el.querySelector("#wnote-save").addEventListener("click", () => {
+    setSession({ ...state.session, workoutNote: el.querySelector("#note-text").value.trim() });
+    closeSheet(); toast("Note saved");
+  });
+}
+
+// Finishing with exercises left: say why, so the log doesn't look abandoned.
+function finishEarlySheet() {
+  const s = state.session;
+  const left = s.exercises.filter((x) => !isDone(x));
+  const list = left.map((x) => `<li>${esc(x.ex?.name ?? x.name)}${x.logged.length ? ` (${x.logged.length} of ${x.sets} sets)` : ""}</li>`).join("");
+  const el = sheet(`<h2>Finish early</h2><div class="sub">Not done yet:</div><ul class="check-list" style="margin:0 0 10px">${list}</ul>
+    <div class="note-chips">${REASONS.map((r) => `<button data-reason="${esc(r)}">${esc(r)}</button>`).join("")}</div>
+    ${noteBox(s.workoutNote, "Why you're stopping (optional)")}
+    <button class="primary" id="early-save"><i class="ti ti-flag" aria-hidden="true"></i>Save workout</button>`);
+  bindChips(el);
+  el.querySelector("#early-save").addEventListener("click", async (ev) => {
+    ev.currentTarget.disabled = true;
+    const note = el.querySelector("#note-text").value.trim();
+    // Unfinished exercises are marked stopped so the log says so.
+    let next = { ...state.session, workoutNote: note };
+    next.exercises.forEach((x, i) => { if (!isDone(x)) next = stopExercise(next, i); });
+    closeSheet();
+    setSession(next);
     const r = await finishSession();
     if (!r.ok) toast(r.msg);
   });

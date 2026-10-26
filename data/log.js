@@ -3,7 +3,7 @@
 import { get, post } from "./sheets.js";
 
 export const LOG_COLUMNS = ["Date", "Day", "Exercise", "Set", "Weight", "Reps", "Notes", "SessionKey", "RPE", "Completed",
-  "ExerciseId", "PlannedLoad", "PlannedReps", "PlannedRIR", "PredictedReps", "EngineVersion"];
+  "ExerciseId", "PlannedLoad", "PlannedReps", "PlannedRIR", "PredictedReps", "EngineVersion", "WorkoutNote"];
 
 export const cleanDate = (raw) => String(raw ?? "").slice(0, 10);
 
@@ -15,12 +15,24 @@ export function rowsToObjects(values) {
   const last = new Map();
   all.forEach((r, i) => { if (r[7]) last.set(`${r[7]}|${r[2]}|${r[3]}`, i); });
   const kept = all.filter((r, i) => !r[7] || last.get(`${r[7]}|${r[2]}|${r[3]}`) === i);
-  const out = kept.map((r) => ({
-    date: cleanDate(r[0]), day: String(r[1] ?? ""), exercise: String(r[2] ?? ""), set: r[3], weight: r[4], reps: r[5],
-    notes: r[6] ?? "", sessionKey: String(r[7] ?? ""), rpe: r[8] ?? "", completed: r[9] ?? "", exerciseId: r[10] ?? "",
-  }));
+  const out = kept.map(rowToObject);
   Object.defineProperty(out, "duplicates", { value: all.length - kept.length, enumerable: false });
   return out;
+}
+
+export function rowToObject(r) {
+  return {
+    date: cleanDate(r[0]), day: String(r[1] ?? ""), exercise: String(r[2] ?? ""), set: r[3], weight: r[4], reps: r[5],
+    notes: r[6] ?? "", sessionKey: String(r[7] ?? ""), rpe: r[8] ?? "", completed: r[9] ?? "", exerciseId: r[10] ?? "",
+    ...(r.length > 11 ? { plannedLoad: r[11] ?? "", plannedReps: r[12] ?? "", plannedRir: r[13] ?? "", predictedReps: r[14] ?? "", engineVersion: r[15] ?? "" } : {}),
+    sessionNote: r[16] ?? "",
+  };
+}
+
+// Back to a sheet row, for re-saving a past workout (e.g. with new notes).
+export function objectToRow(o) {
+  return [o.date, o.day, o.exercise, o.set, o.weight, o.reps, o.notes ?? "", o.sessionKey, o.rpe ?? "", o.completed ?? "",
+    o.exerciseId ?? "", o.plannedLoad ?? "", o.plannedReps ?? "", o.plannedRir ?? "", o.predictedReps ?? "", o.engineVersion ?? "", o.sessionNote ?? ""];
 }
 
 export async function readLog(opts) {
