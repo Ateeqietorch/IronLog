@@ -227,3 +227,23 @@ test("in-session: a set to failure well under plan drops the load, past the one-
   assert.match(after.text, /75×5 with 0 left/);
   assert.ok(after.reason.changePct < 0, "trend shows down, not up");
 });
+
+test("in-session: a set far above plan (50×10 planned, 75×12 done) moves the rest all the way up", () => {
+  const ex = EX["leg-extension"];
+  // Model says ~50 lb for 10 with 2 left
+  const m = settled(ex.id, 70, 30, { reps: 10, rir: 2 });
+  const date = iso("2026-08-01", 42);
+  const plan = prescribe({ model: m, exercise: ex, repRange: [8, 12], rir: 2, sets: 3, date });
+  assert.equal(plan.sets[0].load, 50);
+  const after = recalcRemaining({ plan, model: m, exercise: ex, repRange: [8, 12], date,
+    loggedSets: [{ index: 0, load: 75, reps: 12, rir: 2 }] });
+  // 75×12 proves at least ~75·(1+13/30) ≈ 107 lb; the rest are planned from there.
+  assert.ok(after.sessionE1rm >= 100, String(after.sessionE1rm));
+  assert.ok(after.sets[1].load >= 75, JSON.stringify(after.sets));
+  assert.ok(after.sets[1].reps >= 9, JSON.stringify(after.sets));
+  assert.match(after.text, /stronger today than planned/);
+  // Same load, way more reps (50×16) → the load goes up now
+  const reps = recalcRemaining({ plan, model: m, exercise: ex, repRange: [8, 12], date,
+    loggedSets: [{ index: 0, load: 50, reps: 16, rir: 2 }] });
+  assert.ok(reps.sets[1].load > 50, JSON.stringify(reps.sets));
+});

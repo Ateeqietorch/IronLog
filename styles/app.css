@@ -217,3 +217,4 @@ body:not([data-tab="train"]) .app.resting { padding-bottom: calc(68px + env(safe
 .h-session { display: block; width: 100%; text-align: left; }
 .h-note { font-size: 13px; color: var(--silver-2); }
 .h-note .ti { color: var(--warn); }
+.chip.effort { font-size: 14px; padding: 0 6px; }

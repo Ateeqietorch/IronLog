@@ -196,6 +196,13 @@ export function recalcRemaining({ plan, model, models, exercise, loggedSets, loc
   // might just have been sandbagged; a near-failure set wasn't.)
   let ceiling = Infinity;
   let ceilingSet = null;
+  // And the other way: a set you actually did is proof you're at least that
+  // strong today. Planned 50×10 and did 75×12 means the plan was wrong, not
+  // that you had a lucky set, so the half-step cap must not hold the numbers
+  // back. Reps in reserve count for at most 1 here, so an over-generous
+  // "3 left" can't inflate it.
+  let floor = 0;
+  let floorSet = null;
   for (const s of loggedSets) {
     const eff = toEffective(exercise, Number(s.load), bodyweight);
     const setIndex = s.index ?? s.setIndex;
@@ -205,8 +212,15 @@ export function recalcRemaining({ plan, model, models, exercise, loggedSets, loc
       const shown = (eff * (1 + (Number(s.reps) + Number(s.rir)) / m.k)) / m.fatigueDecay ** setIndex;
       if (shown < ceiling) { ceiling = shown; ceilingSet = s; }
     }
+    if (eff > 0 && Number(s.reps) > 0) {
+      const extra = rirKnown ? Math.min(1, Math.max(0, Number(s.rir))) : 0;
+      const proven = (eff * (1 + (Number(s.reps) + extra) / m.k)) / m.fatigueDecay ** setIndex;
+      if (proven > floor) { floor = proven; floorSet = s; }
+    }
   }
-  if (ceiling < e1rm(m)) m = { ...m, logE1rm: Math.log(ceiling) };
+  if (ceiling < e1rm(m)) { m = { ...m, logE1rm: Math.log(ceiling) }; floorSet = null; }
+  else if (floor > e1rm(m) * 1.02 && floor <= ceiling) { m = { ...m, logE1rm: Math.log(floor) }; ceilingSet = null; }
+  else floorSet = null;
   const done = new Set(loggedSets.map((s) => s.index ?? s.setIndex));
   const lock = new Set(locked);
   const [lo, hi] = repRange;
@@ -222,7 +236,9 @@ export function recalcRemaining({ plan, model, models, exercise, loggedSets, loc
 
   const nextReps = repsAt(E, eff, m.k, m.fatigueDecay, remaining[0].index, r);
   let reloaded = false;
-  if (nextReps < lo - 2 || nextReps > hi + 3) {
+  // Re-pick the load as soon as the next set would leave the rep range, so a
+  // set that blows past the plan moves the weight now, not after more sets.
+  if (nextReps < lo - 1 || nextReps > hi + 1) {
     // No one-rung-down floor here: that guards against one bad session
     // dragging next week's numbers, but within a session the sets you just
     // did are the evidence. Only the caller's explicit floor applies.
@@ -240,7 +256,8 @@ export function recalcRemaining({ plan, model, models, exercise, loggedSets, loc
   let text = plan.text;
   if (anyChanged) {
     const parts = [];
-    if (ceilingSet) parts.push(`${ceilingSet.load}×${ceilingSet.reps} with ${ceilingSet.rir} left puts today's strength at about ${Math.round(E)} lb.`);
+    if (floorSet) parts.push(`${floorSet.load}×${floorSet.reps} shows you're stronger today than planned (about ${Math.round(E)} lb), so the rest go up.`);
+    else if (ceilingSet) parts.push(`${ceilingSet.load}×${ceilingSet.reps} with ${ceilingSet.rir} left puts today's strength at about ${Math.round(E)} lb.`);
     else parts.push(`Adjusted to how the last set went (today's estimate about ${Math.round(E)} lb).`);
     const next = sets.find((s) => !done.has(s.index) && !lock.has(s.index));
     if (next) parts.push(`${reloaded ? "New load: " : "Next: "}${next.load}${unit} for ${next.reps} with ${r} left.`);

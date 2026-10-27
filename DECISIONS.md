@@ -81,3 +81,8 @@ Ateeq stopped single-leg press after two sets (left adductor) and the log just l
 - **The engine's own `note` (e.g. "No history yet…") is kept separate** from the lifter's (`userNote`) so it never lands in the log.
 - **Coach `add_exercise`:** adds without swapping, today or permanent (inserted into the program day at the matching spot; later slots and their trials shift down one). A today-only add has `slotIndex -1`, so a later "permanent" change to it can't rewrite another slot.
 - **The coach sees notes** (today's and the last 4 workouts') and is told a pain note means adjust, not repeat.
+
+## Effort buttons and over-performance — 2026-10-26
+- **Three effort buttons (Failed / 1–2 left / 3+ left) instead of 0–4+.** Ateeq's ratings drift ±2 for identical sets; the 1-vs-2 call is the noisy part. A bucket takes the plan's exact RIR when the plan falls inside it, so "done as planned" is still exact. Chosen over "rate only the last set" because in-session adjustment needs a reading on every set.
+- **A set you did is a floor on today's strength.** Planned 50×10, did 75×12 used to give 55×11 next (the half-step cap and outlier gate treated it as noise). Now today's estimate is raised to at least what that set proves, counting at most 1 rep in reserve; the next sets became 75×10, 75×9. The near-failure ceiling still wins when both apply. The long-term model update is unchanged.
+- **Load is re-picked as soon as the next set would leave the rep range by more than 1** (was 2 below / 3 above), so a big miss moves the weight on the next set.

@@ -8,6 +8,22 @@ import { esc, sheet, closeSheet, toast, buzz } from "./dom.js";
 import { startRest } from "./rest.js";
 
 let chosenRir = null; // reps-in-reserve chip for the set on screen
+
+// Three effort buttons instead of 0–4+: picking between "1 or 2 left" is the
+// hard part of self-rating and the engine barely needs it. A bucket maps to
+// the plan's number when the plan falls inside it, so "on plan" stays exact.
+const EFFORT = [
+  { id: "fail", label: "Failed", hint: "couldn't do another" },
+  { id: "close", label: "1–2 left", hint: "slowed down, could grind 1–2" },
+  { id: "easy", label: "3+ left", hint: "reps still moved well" },
+];
+const bucketOf = (rir) => (rir <= 0 ? "fail" : rir <= 2 ? "close" : "easy");
+function rirFor(bucket, planned) {
+  if (bucket === "fail") return 0;
+  if (bucket === "close") return planned >= 1 && planned <= 2 ? planned : planned < 1 ? 1 : 2;
+  return planned >= 3 ? planned : 3;
+}
+const effortChips = (attr, rir) => EFFORT.map((b) => `<button class="chip effort" data-${attr}="${b.id}" aria-pressed="${bucketOf(rir) === b.id}" aria-label="${b.label}: ${b.hint}">${b.label}</button>`).join("");
 let chosenFor = "";
 
 const unitsFor = (ex) => {
@@ -89,7 +105,7 @@ function nowCard(s, e) {
   }).join("");
 
   // "4+" covers any plan of 4 or more reps in reserve (deloads, first session back).
-  const chips = [0, 1, 2, 3, 4].map((v) => `<button class="chip" data-rir="${v}" aria-pressed="${Math.min(chosenRir, 4) === v}">${v === 4 ? "4+" : v}</button>`).join("");
+  const chips = effortChips("rir", chosenRir);
   const btnLabel = manualFirst ? `Enter set 1` : chosenRir === plannedRir ? "Done as planned" : `Log set ${si + 1}`;
 
   return `
@@ -117,8 +133,8 @@ function nowCard(s, e) {
       <button class="link" id="note-btn2"><i class="ti ti-note" aria-hidden="true"></i>${e.userNote ? "Edit note" : "Add note"}</button>
       ${e.stopped ? `<button class="link" id="resume-btn"><i class="ti ti-player-play" aria-hidden="true"></i>Resume</button>` : "<span></span>"}
     </div>` : `
-    <div class="label">Reps left in the tank</div>
-    <div class="chips" role="group" aria-label="Reps left in the tank">${chips}</div>
+    <div class="label">How close to failure? <span class="mut">(rate right after the last rep)</span></div>
+    <div class="chips" role="group" aria-label="How close to failure">${chips}</div>
     <button class="primary" id="log-btn"><i class="ti ti-check" aria-hidden="true"></i>${btnLabel}</button>
     <div class="card-links">
       ${manualFirst ? "<span></span>" : `<button class="link" id="edit-btn"><i class="ti ti-pencil" aria-hidden="true"></i>Edit set</button>`}
@@ -225,9 +241,8 @@ function bindReviews(root) {
 function bind(root, s) {
   root.querySelector("#day-btn")?.addEventListener("click", dayPicker);
   root.querySelectorAll("[data-rir]").forEach((b) => b.addEventListener("click", () => {
-    const v = Number(b.dataset.rir);
     const planned = target(s.exercises[s.cur]).rir ?? 2;
-    chosenRir = v === 4 && planned >= 4 ? planned : v;
+    chosenRir = rirFor(b.dataset.rir, planned);
     renderTrain(root);
   }));
   root.querySelectorAll("[data-jump]").forEach((b) => b.addEventListener("click", () => setSession({ ...s, cur: Number(b.dataset.jump) })));
@@ -385,8 +400,8 @@ function editSheet(index) {
   const html = `<h2>${editing ? "Fix" : "Log"} set ${setNo}</h2><div class="sub">${esc(e.ex?.name ?? e.name)} · ${unitsFor(e.ex)}</div>
     ${stepper("ed-load", "Load", fmt(load))}
     ${uni ? stepper("ed-L", "Left reps", reps.L) + stepper("ed-R", "Right reps", reps.R) : stepper("ed-reps", "Reps", reps)}
-    <div class="label">Reps left in the tank</div>
-    <div class="chips">${[0, 1, 2, 3, 4].map((v) => `<button class="chip" data-erir="${v}" aria-pressed="${Math.min(rir, 4) === v}">${v === 4 ? "4+" : v}</button>`).join("")}</div>
+    <div class="label">How close to failure?</div>
+    <div class="chips">${effortChips("erir", rir)}</div>
     <button class="primary" id="ed-save"><i class="ti ti-check" aria-hidden="true"></i>${editing ? "Save set" : `Log set ${setNo}`}</button>`;
   const el = sheet(html);
   const num = (id) => el.querySelector("#" + id);
@@ -397,9 +412,8 @@ function editSheet(index) {
     else input.value = Math.max(0, (Number(input.value) || 0) + dir);
   }));
   el.querySelectorAll("[data-erir]").forEach((b) => b.addEventListener("click", () => {
-    const v = Number(b.dataset.erir);
-    rir = v === 4 && rir >= 4 ? rir : v;
-    el.querySelectorAll("[data-erir]").forEach((x) => x.setAttribute("aria-pressed", String(Number(x.dataset.erir) === Math.min(rir, 4))));
+    rir = rirFor(b.dataset.erir, editing ? editing.rir : target(e).rir ?? 2);
+    el.querySelectorAll("[data-erir]").forEach((x) => x.setAttribute("aria-pressed", String(x.dataset.erir === bucketOf(rir))));
   }));
   el.querySelector("#ed-save").addEventListener("click", () => {
     load = Number(num("ed-load").value);
