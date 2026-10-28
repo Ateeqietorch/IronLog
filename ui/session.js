@@ -224,6 +224,39 @@ export function toRows(s) {
   return rows;
 }
 
+// Earlier workouts that included this exercise, newest first, for the
+// "Last time" sheet. Rows match on the saved exercise id, else on the name
+// (resolved through the catalog so old v2 spellings still count). `resolve`
+// is injected so this stays free of catalog imports in tests.
+export function pastSessionsFor(rows, { id = null, name = "" } = {}, { excludeKey = null, limit = 3, resolve = null } = {}) {
+  const want = String(name ?? "").trim().toLowerCase();
+  const cache = new Map();
+  const matches = (r) => {
+    if (id && r.exerciseId) return r.exerciseId === id;
+    const n = String(r.exercise ?? "").trim();
+    if (n.toLowerCase() === want) return true;
+    if (!id || !resolve) return false;
+    if (!cache.has(n)) cache.set(n, resolve(n));
+    return cache.get(n) === id;
+  };
+  const by = new Map();
+  for (const r of rows ?? []) {
+    if (!r?.date || !matches(r)) continue;
+    const key = r.sessionKey || `${r.date}_${r.day}`;
+    if (key === excludeKey) continue;
+    if (!by.has(key)) by.set(key, { key, date: String(r.date).slice(0, 10), day: String(r.day ?? ""), name: String(r.exercise ?? ""), sets: [], note: "", sessionNote: "" });
+    const s = by.get(key);
+    const rpe = r.rpe === "" || r.rpe == null ? null : Number(r.rpe);
+    s.sets.push({ set: Number(r.set) || s.sets.length + 1, weight: String(r.weight ?? ""), reps: String(r.reps ?? ""), rir: rpe == null || Number.isNaN(rpe) ? null : Math.max(0, 10 - rpe) });
+    if (!s.note && String(r.notes ?? "").trim()) s.note = String(r.notes).trim();
+    if (!s.sessionNote && String(r.sessionNote ?? "").trim()) s.sessionNote = String(r.sessionNote).trim();
+  }
+  const out = [...by.values()];
+  out.forEach((s) => s.sets.sort((a, b) => a.set - b.set));
+  out.sort((a, b) => b.date.localeCompare(a.date) || b.key.localeCompare(a.key));
+  return out.slice(0, limit);
+}
+
 // Neighbouring loads for the edit stepper.
 export function stepLoad(ex, load, dir, gymProfile = null) {
   if (!ex) return Math.max(0, Number(load || 0) + dir * 5);

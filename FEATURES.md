@@ -268,7 +268,13 @@ Claude calls go through a shared `callClaudeMessages()` helper (supports full mu
 
 ## 13. PWA / Installability
 
-`manifest.json` + a hand-generated barbell icon (no image tooling was available in the build environment, so it's a hand-rolled PNG encoder via `zlib`/`struct`) + a service worker (`sw.js`) caching the static app shell. Network-first strategy for the shell — since this app gets redeployed often, an online device should always get the latest code, falling back to the last cached copy only when offline. **Does not include push notifications** — that needs real backend infrastructure (VAPID keys, a subscription store, a scheduled trigger mechanism) that was explicitly scoped out as a separate project.
+`manifest.json` + a hand-generated barbell icon (no image tooling was available in the build environment, so it's a hand-rolled PNG encoder via `zlib`/`struct`) + a service worker (`sw.js`) caching the static app shell. Network-first strategy for the shell — since this app gets redeployed often, an online device should always get the latest code, falling back to the last cached copy only when offline. **Rest alerts (v3, Oct 2026):** the rest dock vibrates and beeps at 0 in the app; on Android, an opt-in local notification (posted by the service worker) vibrates at 0 when the phone is locked, and locking mid-rest shows the end time on the lock screen. iPhone can't vibrate from the web or run JS while locked, so an opt-in Shortcuts hand-off (`shortcuts://run-shortcut?name=IronLog Rest&input=text&text=<seconds>`) starts the native Clock timer instead. Settings → Rest timer alerts. **Does not include server push notifications** — that needs real backend infrastructure (VAPID keys, a subscription store, a scheduled trigger mechanism) that was explicitly scoped out as a separate project.
+
+---
+
+## 13b. Last time (per exercise)
+
+Each exercise card on Train shows a "Last time" line (date + every set). Tapping it opens a sheet with that session's sets, effort, exercise note and workout note, plus the two sessions before it. Rows match on the saved exercise id, else the name resolved through the catalog, so pre-v3 rows count too (`pastSessionsFor` in `ui/session.js`).
 
 ---
 

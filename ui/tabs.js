@@ -2,6 +2,7 @@
 import { state, setSettings, newBlock, updateSessionNotes } from "./store.js";
 import { e1rm } from "../engine/model.js";
 import { esc, sheet, closeSheet, fmtDate, setHaptics, toast } from "./dom.js";
+import { isIOS, notifySupported, requestNotify, testAlert, runIosTimer } from "./rest.js";
 
 const gear = `<button class="icon-btn" id="settings-btn" aria-label="Settings"><i class="ti ti-settings" aria-hidden="true"></i></button>`;
 
@@ -83,6 +84,7 @@ export function settingsSheet() {
     <div class="label" style="margin-top:12px">When you get stronger, progress by</div>
     <div class="seg">${seg("reps-first", "More reps")}${seg("balanced", "Balanced")}${seg("load-first", "More weight")}</div>
     <div class="toggle-row"><span>Vibrate on set and rest end</span><input type="checkbox" id="set-haptics" ${s.haptics ? "checked" : ""} style="width:22px;height:22px;accent-color:var(--red-fill)" /></div>
+    <button class="list-btn" id="rest-alerts"><span>Rest timer alerts</span><span class="mut">${esc(alertSummary(s))} <i class="ti ti-chevron-right" aria-hidden="true"></i></span></button>
     <button class="list-btn" id="new-block"><span>Start a new training block</span><span class="mut">${state.meso?.start ? `current started ${esc(fmtDate(state.meso.start))}` : ""}</span></button>
     <a class="list-btn" href="v2.html" style="color:inherit;text-decoration:none"><span>Open classic IronLog</span><i class="ti ti-external-link" aria-hidden="true"></i></a>`);
   el.querySelectorAll("[data-policy]").forEach((b) => b.addEventListener("click", () => {
@@ -90,6 +92,71 @@ export function settingsSheet() {
     el.querySelectorAll("[data-policy]").forEach((x) => x.setAttribute("aria-pressed", String(x.dataset.policy === b.dataset.policy)));
     toast("Applies from your next workout");
   }));
+  el.querySelector("#rest-alerts").addEventListener("click", restAlertsSheet);
   el.querySelector("#set-haptics").addEventListener("change", (ev) => { setSettings({ haptics: ev.target.checked }); setHaptics(ev.target.checked); });
   el.querySelector("#new-block").addEventListener("click", () => { if (confirm("Start a new 5-week block from today? Week 1 begins with 3 reps in the tank.")) { newBlock(); toast("New block started"); } });
+}
+
+// ── Rest timer alerts ──────────────────────────────────────────────────────
+function alertSummary(s) {
+  const on = [];
+  if (s.restBeep ?? true) on.push("beep");
+  if (s.restNotify && notifySupported() && Notification.permission === "granted") on.push("notification");
+  if (isIOS() && s.iosTimer) on.push("iPhone timer");
+  return on.length ? on.join(" + ") : "off";
+}
+
+function restAlertsSheet() {
+  const s = state.settings;
+  const ios = isIOS();
+  const perm = notifySupported() ? Notification.permission : "unsupported";
+  const toggle = (id, label, on, sub = "") => `<div class="toggle-row" style="align-items:flex-start;padding:10px 0"><span>${label}${sub ? `<br><span class="mut" style="font-size:13px;line-height:1.4">${sub}</span>` : ""}</span><input type="checkbox" id="${id}" ${on ? "checked" : ""} style="width:22px;height:22px;flex:none;margin-left:12px;accent-color:var(--red-fill)" /></div>`;
+  const iosBlock = ios ? `
+    <div class="label" style="margin-top:16px">iPhone lock screen</div>
+    ${toggle("al-ios", "Start the iPhone timer each rest", s.iosTimer, "iPhone doesn't let web apps vibrate or run while locked. This hands each rest to the Clock app's timer, which counts down on your lock screen and rings at 0. Your phone jumps to Shortcuts for a second each set; +30s and Skip here don't change that timer.")}
+    <div id="al-ios-setup" class="${s.iosTimer ? "" : "hidden"}">
+      <ol class="check-list" style="margin:6px 0 8px;padding-left:20px;font-size:14px;line-height:1.5">
+        <li>Open <b>Shortcuts</b>, tap <b>+</b>, name it <b>${esc(s.iosShortcut || "IronLog Rest")}</b>.</li>
+        <li>Add the action <b>Start Timer</b>.</li>
+        <li>Tap its duration, switch the unit to <b>seconds</b>, and set the number to the <b>Shortcut Input</b> variable.</li>
+        <li>Tap <b>Test</b> below. The first time, iPhone asks to allow it; tap <b>Always Allow</b>.</li>
+      </ol>
+      <div class="note-label">Shortcut name</div>
+      <input class="note-input" id="al-ios-name" style="min-height:0;height:44px" value="${esc(s.iosShortcut || "IronLog Rest")}" />
+      <button class="secondary" id="al-ios-test" style="margin-top:8px">Test with a 10 s timer</button>
+    </div>` : "";
+  const notifySub = perm === "unsupported"
+    ? "Not available in this browser. Add IronLog to your home screen and open it from there."
+    : perm === "denied"
+      ? "Notifications are blocked for IronLog. Turn them on in your phone's settings for this app, then come back."
+      : ios
+        ? "Only fires if IronLog is still running in the background; once the phone locks, iPhone pauses it. Use the iPhone timer below for the lock screen."
+        : "When the phone is locked or you're in another app: a notification that vibrates at 0. Locking mid-rest also shows when rest ends.";
+  const el = sheet(`<h2>Rest timer alerts</h2><div class="sub">What happens when a rest hits 0</div>
+    ${toggle("al-beep", "Beep in the app", s.restBeep ?? true, ios ? "Plays over your music. The silent switch mutes it." : "Plays over your music.")}
+    ${toggle("al-notify", "Notify when the phone is locked", !!s.restNotify && perm === "granted", notifySub)}
+    ${iosBlock}
+    <button class="primary" id="al-test" style="margin-top:14px"><i class="ti ti-bell-ringing" aria-hidden="true"></i>Test the alert</button>`);
+
+  el.querySelector("#al-beep").addEventListener("change", (ev) => setSettings({ restBeep: ev.target.checked }));
+  const notifyBox = el.querySelector("#al-notify");
+  if (perm === "unsupported" || perm === "denied") notifyBox.disabled = true;
+  notifyBox.addEventListener("change", async (ev) => {
+    if (!ev.target.checked) return setSettings({ restNotify: false });
+    const r = await requestNotify();
+    if (r === "granted") { setSettings({ restNotify: true }); toast("Rest notifications on"); }
+    else { ev.target.checked = false; setSettings({ restNotify: false }); toast(r === "denied" ? "Notifications were blocked" : "Notifications aren't available here"); }
+  });
+  el.querySelector("#al-test").addEventListener("click", () => { testAlert(); });
+  if (ios) {
+    el.querySelector("#al-ios").addEventListener("change", (ev) => {
+      setSettings({ iosTimer: ev.target.checked });
+      el.querySelector("#al-ios-setup").classList.toggle("hidden", !ev.target.checked);
+    });
+    el.querySelector("#al-ios-name").addEventListener("change", (ev) => setSettings({ iosShortcut: ev.target.value.trim() || "IronLog Rest" }));
+    el.querySelector("#al-ios-test").addEventListener("click", () => {
+      setSettings({ iosShortcut: el.querySelector("#al-ios-name").value.trim() || "IronLog Rest" });
+      runIosTimer(10);
+    });
+  }
 }

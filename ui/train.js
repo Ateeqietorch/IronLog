@@ -2,10 +2,11 @@
 import { state, setSession, startDay, finishSession, hasPending, undo, isSaving, reviewTrial, suggestNext, today } from "./store.js";
 import { switchSheet } from "./switch.js";
 import { inReview, trialSummary } from "../data/trials.js";
-import { logSet, target, isDone, sessionDone, anyLogged, stepLoad, stopExercise, resumeExercise, setExerciseNote } from "./session.js";
+import { logSet, target, isDone, sessionDone, anyLogged, stepLoad, stopExercise, resumeExercise, setExerciseNote, pastSessionsFor } from "./session.js";
+import { resolveExercise } from "../engine/catalog.js";
 import { statusLine } from "../engine/meso.js";
-import { esc, sheet, closeSheet, toast, buzz } from "./dom.js";
-import { startRest } from "./rest.js";
+import { esc, sheet, closeSheet, toast, buzz, fmtDate } from "./dom.js";
+import { startRest, primeAlerts } from "./rest.js";
 
 let chosenRir = null; // reps-in-reserve chip for the set on screen
 
@@ -125,6 +126,7 @@ function nowCard(s, e) {
       <span class="load">${manualFirst ? "—" : fmt(t.load)}</span><span class="x">×</span><span class="reps">${manualFirst ? "?" : t.reps}</span>
     </div>
     <div class="units"><span style="min-width:120px">${unitsFor(e.ex)}</span><span>reps</span></div>`}
+    ${lastTimeRow(s, e)}
     ${reasonText ? `<button class="reason" id="why"><i class="ti ${icon}" aria-hidden="true"></i><span>${esc(reasonText)}</span></button>` : ""}
     <div class="sets">${rows}</div>
     ${e.stopped ? `<div class="label stopped"><i class="ti ti-hand-stop" aria-hidden="true"></i> ${e.logged.length ? `Stopped after ${e.logged.length} of ${e.stopped.of} sets` : "Skipped"}</div>` : ""}
@@ -145,6 +147,34 @@ function nowCard(s, e) {
       <button class="link" id="stop-btn"><i class="ti ti-hand-stop" aria-hidden="true"></i>${e.logged.length ? "End exercise here" : "Skip exercise"}</button>
     </div>`}
   </section>`;
+}
+
+// ── Last time ──────────────────────────────────────────────────────────────
+const effortOf = (rir) => (rir == null ? "" : rir <= 0 ? "failed" : rir <= 2 ? `${rir} left` : `${rir}+ left`);
+const pastFor = (s, e, limit = 3) => pastSessionsFor(state.rows, { id: e.ex?.id ?? null, name: e.name }, {
+  excludeKey: s.sessionKey, limit, resolve: (n) => resolveExercise(n, state.index).match?.id ?? null,
+});
+const setText = (x) => `${x.weight || "—"} × ${x.reps || "—"}`;
+
+function lastTimeRow(s, e) {
+  const last = pastFor(s, e, 1)[0];
+  if (!last) return `<div class="last none"><i class="ti ti-history" aria-hidden="true"></i><span>No earlier sets logged for this one</span></div>`;
+  return `<button class="last" id="last-btn" aria-label="See what you did last time"><i class="ti ti-history" aria-hidden="true"></i><span><b>Last time</b> · ${esc(fmtDate(last.date))} · ${esc(last.sets.map(setText).join(", "))}</span><i class="ti ti-chevron-right" aria-hidden="true"></i></button>`;
+}
+
+function lastTimeSheet() {
+  const s = state.session;
+  const e = s.exercises[s.cur];
+  const past = pastFor(s, e, 3);
+  if (!past.length) return;
+  const dayLabel = (d) => state.program.days.find((x) => x.key === d)?.label ?? d.split("—")[1]?.trim() ?? d;
+  const block = (p, full = true) => `<div class="group-title" style="margin:${full ? "6px" : "18px"} 0 2px">${esc(fmtDate(p.date))} · ${esc(dayLabel(p.day))}${p.name !== (e.ex?.name ?? e.name) ? ` <span class="mut">(${esc(p.name)})</span>` : ""}</div>
+    <div class="rows">${p.sets.map((x) => `<div class="row"><span>Set ${x.set}</span><span class="r"><span class="num" style="font-size:${full ? 22 : 17}px;color:var(--silver)">${esc(setText(x))}</span>${x.rir != null ? `<br>${esc(effortOf(x.rir))}` : ""}</span></div>`).join("")}
+    ${p.note ? `<div class="h-note" style="padding:8px 0"><i class="ti ti-note" aria-hidden="true"></i> ${esc(p.note)}</div>` : ""}
+    ${full && p.sessionNote ? `<div class="h-note" style="padding:0 0 8px"><i class="ti ti-notes" aria-hidden="true"></i> Workout: ${esc(p.sessionNote)}</div>` : ""}</div>`;
+  sheet(`<h2>Last time</h2><div class="sub">${esc(e.ex?.name ?? e.name)} · ${unitsFor(e.ex)}</div>
+    ${block(past[0], true)}
+    ${past.length > 1 ? `<div class="label" style="margin-top:18px">Before that</div><div class="rows">${past.slice(1).map((p) => `<div class="row"><span>${esc(fmtDate(p.date))}</span><span class="r" style="color:var(--silver-2)">${esc(p.sets.map(setText).join(", "))}</span></div>`).join("")}</div>` : ""}`);
 }
 
 function upNext(s) {
@@ -248,6 +278,7 @@ function bind(root, s) {
   root.querySelectorAll("[data-jump]").forEach((b) => b.addEventListener("click", () => setSession({ ...s, cur: Number(b.dataset.jump) })));
   root.querySelectorAll("[data-edit]").forEach((b) => b.addEventListener("click", () => editSheet(Number(b.dataset.edit))));
   root.querySelector("#why")?.addEventListener("click", whySheet);
+  root.querySelector("#last-btn")?.addEventListener("click", lastTimeSheet);
   root.querySelector("#prev-ex")?.addEventListener("click", () => s.cur > 0 && setSession({ ...s, cur: s.cur - 1 }));
   root.querySelector("#next-ex")?.addEventListener("click", () => s.cur < s.exercises.length - 1 && setSession({ ...s, cur: s.cur + 1 }));
   root.querySelector("#edit-btn")?.addEventListener("click", () => editSheet(null));
@@ -350,15 +381,25 @@ function finishEarlySheet() {
 }
 
 function commit(exIdx, entry) {
+  primeAlerts();
   const before = state.session;
   const e = before.exercises[exIdx];
   const next = logSet(before, exIdx, entry, Date.now());
   buzz(15);
   setSession(next, { undoable: true });
   const ex = e.ex;
-  if (!isDone(next.exercises[exIdx]) || !sessionDone(next)) startRest(ex);
+  if (!isDone(next.exercises[exIdx]) || !sessionDone(next)) startRest(ex, { next: nextUpText(next) });
   const what = isDone(next.exercises[exIdx]) ? `${ex?.name ?? e.name} done` : `Set ${(entry.index ?? e.logged.length) + 1} logged`;
   toast(what, { label: "Undo", fn: () => { undo(); toast("Set removed"); } });
+}
+
+// What the rest alert says is next, e.g. "Lat pulldown · set 3: 140 × 10".
+function nextUpText(s) {
+  const e = s.exercises[s.cur];
+  const x = e && !isDone(e) ? e : s.exercises.find((y) => !isDone(y));
+  if (!x) return "";
+  const t = target(x);
+  return `${x.ex?.name ?? x.name} · set ${x.logged.length + 1}${t.load != null && x.plan ? `: ${fmt(t.load)} × ${t.reps}` : ""}`;
 }
 
 function dayPicker() {

@@ -1,4 +1,4 @@
-const CACHE_NAME = "ironlog-shell-v12";
+const CACHE_NAME = "ironlog-shell-v13";
 const SHELL_FILES = [
   "./",
   "./index.html",
@@ -76,5 +76,16 @@ self.addEventListener("fetch", (event) => {
         return res;
       })
       .catch(() => caches.match(req).then((cached) => cached || caches.match("./index.html")))
+  );
+});
+
+// Tapping a rest notification brings IronLog back to the front.
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  event.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((list) => {
+      const win = list.find((c) => "focus" in c);
+      return win ? win.focus() : self.clients.openWindow("./index.html");
+    })
   );
 });
