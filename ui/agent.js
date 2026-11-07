@@ -14,7 +14,7 @@ import {
   nutritionView, setNutrition, logWeight, logIntake, addMeal,
 } from "./store.js";
 import { GOALS, ACTIVITY } from "../engine/nutrition.js";
-import { groceryPlan } from "../engine/foods.js";
+import { groceryPlan, SNACK_SWAPS, food } from "../engine/foods.js";
 import { normalizeMeal } from "./meals.js";
 import { active, describe as describeRule } from "../data/constraints.js";
 import { describeDirective, KINDS, TECHNIQUES, niceMuscleName } from "../engine/directives.js";
@@ -176,7 +176,7 @@ const RULES = [
   "mode: apply when the lifter asked for the change (they can undo it). propose when it's your own idea (they get Apply / Not now). Never claim something changed unless a tool applied it.",
   "Look before you explain: if they ask why a number is what it is, read get_plan or get_exercise and explain the lever and the last session it came from. Be proactive about real problems you see in context (a muscle far under its minimum, pain notes, a stalled lift, sessions over time) and propose the fix.",
   "Evidence you can rely on: ~10+ hard sets per muscle per week, most sets 0–3 reps from failure, 5–30 reps all build muscle when close to failure, rest 90 s+, stretched-position exercises have a small edge, deloads every 4–6 weeks or when performance drops. Never tell them to train through sharp or joint pain; suggest a pain-free alternative and a professional if it persists. Breaks happen; muscle comes back faster the second time, so the best program is the one they can keep doing.",
-  "Nutrition: the app sets daily calories and macros from a resting-burn estimate, then a weekly check-in compares intake (logged, or targets assumed eaten) with the weight trend to find real expenditure, and moves calories ≤250 at a time toward the goal rate (cut 0.5–1%/wk keeps muscle, lean gain 0.25–0.5%/wk). Protein 1 g/lb cutting, 0.9 maintaining, 0.8 gaining; fat ~25% (floor 0.3 g/lb); carbs the rest; never below resting burn. Change goals with set_nutrition; never invent calorie numbers, read get_nutrition. Training and diet interact: in a hard cut, expect strength to hold rather than climb, and suggest a slower rate if performance drops on several muscles. Meals without a label (homemade, restaurant): estimate them yourself and log with log_meal, item by item, counting cooking oil and drinks; say what portion you assumed. Food ideas and shopping: get_groceries gives a week's list sized to their targets; suggest swaps within the same group (Greek yogurt, skyr, cottage cheese; chicken, turkey, white fish, shrimp, lean beef; rice, potatoes, oats). No extreme diets; if they mention restricting, bingeing or purging, be supportive and don't give numbers.",
+  "Nutrition: the app sets daily calories and macros from a resting-burn estimate, then a weekly check-in compares intake (logged, or targets assumed eaten) with the weight trend to find real expenditure, and moves calories ≤250 at a time toward the goal rate (cut 0.5–1%/wk keeps muscle, lean gain 0.25–0.5%/wk). Protein 1 g/lb cutting, 0.9 maintaining, 0.8 gaining; fat ~25% (floor 0.3 g/lb); carbs the rest; never below resting burn. Change goals with set_nutrition; never invent calorie numbers, read get_nutrition. Training and diet interact: in a hard cut, expect strength to hold rather than climb, and suggest a slower rate if performance drops on several muscles. Meals without a label (homemade, restaurant): estimate them yourself and log with log_meal, item by item, counting cooking oil and drinks; say what portion you assumed. Food ideas and shopping: get_groceries gives a week's list sized to their targets; suggest swaps within the same group (Greek yogurt, Oikos Pro, cottage cheese; whey, Core Power, Premier Protein; Goldfish 100-cal pouches, Rice Krispies Treats for pre-workout carbs; chicken, turkey, white fish, shrimp, lean beef; rice, potatoes, oats). No extreme diets; if they mention restricting, bingeing or purging, be supportive and don't give numbers.",
   "Use add_rule when they don't want an exercise or something hurts; remember for other durable facts. Don't name your tools to the lifter.",
 ].join("\n");
 
@@ -402,7 +402,7 @@ export async function runTool(name, input, sink) {
       const t = nutritionView().target;
       if (!t) return { error: "No targets yet: they need to set up the Macros tab and log a weight." };
       const g = groceryPlan(t);
-      return { target: t, sampleDay: g.day.map((x) => `${x.meal}: ${x.n} × ${x.serving} ${x.name}`), dayTotals: g.totals, week: g.week.map((x) => `${x.name}: ${x.amount != null ? `${x.amount}${/^\d/.test(x.unit) ? " ×" : ""} ${x.unit}` : `${x.servings} servings`}`) };
+      return { target: t, sampleDay: g.day.map((x) => `${x.meal}: ${x.n} × ${x.serving} ${x.name}`), dayTotals: g.totals, snackSwaps: SNACK_SWAPS.map(([id, instead]) => `${food(id).name} (${food(id).kcal} kcal, P${food(id).p}) instead of ${instead}`), week: g.week.map((x) => `${x.name}: ${x.amount != null ? `${x.amount}${/^\d/.test(x.unit) ? " ×" : ""} ${x.unit}` : `${x.servings} servings`}`) };
     }
     case "log_body": {
       const out = {};

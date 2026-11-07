@@ -1,7 +1,7 @@
 // Macros tab: daily targets, quick weight/food logging, the weight trend,
 // and the weekly check-in that adjusts the targets (engine/nutrition.js).
 import { state, today, nutritionView, setNutrition, logWeight, logIntake, runCheckIn, addMeal, removeMeal } from "./store.js";
-import { FOODS, CATEGORIES, groceryPlan } from "../engine/foods.js";
+import { FOODS, CATEGORIES, groceryPlan, SNACK_SWAPS, food } from "../engine/foods.js";
 import { estimateMeal, scaleMeal } from "./meals.js";
 import { GOALS, ACTIVITY, trend } from "../engine/nutrition.js";
 import { esc, sheet, closeSheet, toast, fmtDate } from "./dom.js";
@@ -272,7 +272,7 @@ function grocerySheet(target) {
   const foodsHtml = byCat(FOODS, (f) => `<div class="row food-row"><span>${esc(f.name)}<br><span class="mut" style="font-size:12px">${esc(f.serving)} · ${f.kcal} kcal · P${f.p} C${f.c} F${f.f}</span>${f.tip ? `<br><span class="mut" style="font-size:12px">${esc(f.tip)}</span>` : ""}</span></div>`);
   const el = sheet(`<h2>Grocery list</h2>
     <div class="seg" data-seg="gtab"><button type="button" data-v="week" aria-pressed="true">This week</button><button type="button" data-v="day">Sample day</button><button type="button" data-v="foods">Foods</button></div>
-    <div data-pane="week">${weekHtml}<div class="mut" style="font-size:12px;margin-top:10px">Ticks reset each Monday.</div></div>
+    <div data-pane="week">${weekHtml}<div class="label">Snack picks to rotate in</div>${SNACK_SWAPS.map(([id, instead]) => { const f = food(id); return `<label class="groc-item"><input type="checkbox" data-g="${esc(id)}" ${checks.has(id) ? "checked" : ""}/><span>${esc(f.name)}<br><span class="mut" style="font-size:12px">${f.kcal} kcal · P${f.p} · instead of ${esc(instead)}</span></span><span class="mut">optional</span></label>`; }).join("")}<div class="mut" style="font-size:12px;margin-top:10px">Snack picks swap for something in the plan, so the day still adds up. Ticks reset each Monday.</div></div>
     <div data-pane="day" hidden>${dayHtml}</div>
     <div data-pane="foods" hidden>${foodsHtml}</div>
     <button class="link" id="g-close">Close</button>`);

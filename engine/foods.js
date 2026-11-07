@@ -15,7 +15,7 @@ export const FOODS = Object.freeze([
   { id: "eggs", name: "Eggs", cat: "protein", serving: "1 large", kcal: 72, p: 6, c: 0, f: 5, buy: { per: 1, unit: "eggs", as: "dozen", div: 12 } },
   { id: "egg-whites", name: "Liquid egg whites", cat: "protein", serving: "½ cup", kcal: 63, p: 13, c: 1, f: 0, buy: { per: 0.5, unit: "cup", as: "32-oz cartons", div: 4 }, tip: "Stretch whole eggs: 2 eggs + ½ cup whites is a 25 g protein scramble." },
   { id: "cottage-cheese", name: "Low-fat cottage cheese", cat: "protein", serving: "½ cup", kcal: 81, p: 14, c: 3, f: 1, buy: { per: 0.5, unit: "cup", as: "16-oz tubs", div: 2 } },
-  { id: "whey", name: "Whey protein", cat: "protein", serving: "1 scoop", kcal: 120, p: 24, c: 3, f: 2, buy: { per: 1, unit: "scoops", as: "scoops", div: 1 } },
+  { id: "whey", name: "Whey protein", cat: "protein", serving: "1 scoop", kcal: 120, p: 24, c: 3, f: 2, buy: { per: 1, unit: "scoops", as: "scoops", div: 1 }, tip: "On the go, a Core Power or Premier Protein shake does the same job." },
   { id: "tuna", name: "Canned tuna in water", cat: "protein", serving: "1 can", kcal: 120, p: 26, c: 0, f: 1, buy: { per: 1, unit: "cans", as: "cans", div: 1 } },
   { id: "ultrafiltered-milk", name: "Ultra-filtered skim milk", cat: "protein", serving: "1 cup", kcal: 80, p: 13, c: 6, f: 0, buy: { per: 1, unit: "cup", as: "52-oz bottles", div: 6.5 } },
   { id: "tofu", name: "Firm tofu", cat: "protein", serving: "½ block (7 oz)", kcal: 180, p: 20, c: 4, f: 10, buy: { per: 0.5, unit: "blocks", as: "blocks", div: 1 } },
@@ -45,10 +45,18 @@ export const FOODS = Object.freeze([
   { id: "almonds", name: "Almonds", cat: "fats", serving: "1 oz (23)", kcal: 165, p: 6, c: 6, f: 14, buy: { per: 1, unit: "oz", as: "oz", div: 1 } },
   { id: "pb-powder", name: "Powdered peanut butter", cat: "fats", serving: "2 tbsp", kcal: 60, p: 6, c: 5, f: 2, buy: { per: 2, unit: "tbsp", as: "tbsp", div: 1 }, tip: "Peanut-butter taste for a third of the calories." },
   { id: "peanut-butter", name: "Peanut butter", cat: "fats", serving: "2 tbsp", kcal: 190, p: 7, c: 7, f: 16, buy: { per: 2, unit: "tbsp", as: "tbsp", div: 1 } },
+  // Grab-and-go snacks (branded; label values, flavors vary a little)
+  { id: "goldfish-100", name: "Goldfish 100-calorie pouches", cat: "snacks", serving: "1 pouch", kcal: 100, p: 3, c: 14, f: 3.5, buy: { per: 1, unit: "pouches", as: "pouches", div: 1 }, tip: "Already portioned, so a crunchy carb hit can't turn into half a bag. Good 30–60 min before training." },
+  { id: "oikos-pro", name: "Oikos Pro yogurt cup", cat: "snacks", serving: "1 cup (5.3 oz)", kcal: 130, p: 20, c: 6, f: 3, buy: { per: 1, unit: "cups", as: "cups", div: 1 }, tip: "20 g protein with a spoon and no prep." },
+  { id: "core-power", name: "Fairlife Core Power 26 g shake", cat: "snacks", serving: "1 bottle (14 oz)", kcal: 170, p: 26, c: 6, f: 4.5, buy: { per: 1, unit: "bottles", as: "bottles", div: 1 }, tip: "Swap for a whey scoop when you're out of the house." },
+  { id: "premier-protein", name: "Premier Protein shake", cat: "snacks", serving: "1 carton (11 oz)", kcal: 160, p: 30, c: 4, f: 3, buy: { per: 1, unit: "cartons", as: "cartons", div: 1 }, tip: "Cheapest ready-to-drink protein at Costco." },
+  { id: "chomps", name: "Chomps beef stick", cat: "snacks", serving: "1 stick", kcal: 100, p: 10, c: 0, f: 7, buy: { per: 1, unit: "sticks", as: "sticks", div: 1 }, tip: "Lives in a gym bag for weeks." },
+  { id: "babybel-light", name: "Mini Babybel Light", cat: "snacks", serving: "1 cheese", kcal: 50, p: 6, c: 0, f: 3, buy: { per: 1, unit: "cheeses", as: "cheeses", div: 1 } },
+  { id: "rice-krispies-treat", name: "Rice Krispies Treats bar", cat: "snacks", serving: "1 bar", kcal: 90, p: 1, c: 17, f: 2.5, buy: { per: 1, unit: "bars", as: "bars", div: 1 }, tip: "Fast pre-workout sugar for 90 calories." },
   // Free flavor
   { id: "flavor", name: "Salsa, hot sauce, mustard, spices, pickles, sugar-free syrup", cat: "free", serving: "as needed", kcal: 10, p: 0, c: 2, f: 0, buy: null, tip: "Near-zero calories; this is how lean meals stay interesting." },
 ]);
-export const CATEGORIES = Object.freeze({ protein: "Protein", carbs: "Carbs", produce: "Fruit and vegetables", fats: "Fats", free: "Flavor for free" });
+export const CATEGORIES = Object.freeze({ protein: "Protein", carbs: "Carbs", produce: "Fruit and vegetables", fats: "Fats", snacks: "Grab-and-go snacks", free: "Flavor for free" });
 const byId = new Map(FOODS.map((f) => [f.id, f]));
 export const food = (id) => byId.get(id);
 
@@ -59,7 +67,7 @@ const TEMPLATE = [
   { id: "chicken-breast", n: 1.5, meal: "Lunch", scale: "protein" }, { id: "rice", n: 1, meal: "Lunch", scale: "carbs" }, { id: "broccoli", n: 1, meal: "Lunch" },
   { id: "DINNER", n: 1.5, meal: "Dinner", scale: "protein" }, { id: "potato", n: 1, meal: "Dinner", scale: "carbs" }, { id: "stir-fry-veg", n: 1, meal: "Dinner" },
   { id: "olive-oil", n: 1, meal: "Cooking", scale: "fat" },
-  { id: "whey", n: 1, meal: "Snack" }, { id: "eggs", n: 2, meal: "Snack" }, { id: "banana", n: 1, meal: "Snack" }, { id: "almonds", n: 0.5, meal: "Snack", scale: "fat" },
+  { id: "whey", n: 1, meal: "Snack" }, { id: "eggs", n: 2, meal: "Snack" }, { id: "banana", n: 1, meal: "Snack" }, { id: "almonds", n: 0.5, meal: "Snack", scale: "fat" }, { id: "goldfish-100", n: 1, meal: "Snack" },
 ];
 // Dinner protein rotates through the week (days per source).
 export const DINNER_ROTATION = Object.freeze([["lean-beef", 2], ["salmon", 2], ["shrimp", 1], ["turkey", 2]]);
@@ -132,3 +140,9 @@ export function sumItems(items = []) {
   for (const k of Object.keys(t)) t[k] = Math.round(t[k]);
   return t;
 }
+
+// Branded snacks to rotate in (not counted in the plan): each with what it replaces.
+export const SNACK_SWAPS = Object.freeze([
+  ["oikos-pro", "a scoop of whey or the yogurt bowl"], ["core-power", "a scoop of whey"], ["premier-protein", "a scoop of whey"],
+  ["chomps", "2 eggs"], ["babybel-light", "1 egg"], ["rice-krispies-treat", "the Goldfish pouch, pre-workout"],
+]);

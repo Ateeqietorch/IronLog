@@ -28,3 +28,6 @@ The coach can do the same from chat ("log the biryani I just had"): the `log_mea
 ## Grocery list
 
 `engine/foods.js` holds about 37 macro-friendly staples (Greek yogurt, skyr, cottage cheese, chicken, lean beef and turkey, salmon, shrimp, eggs, whey, oats, rice, potatoes, fruit, vegetables, fats, zero-calorie flavor), each with a serving, macros, a shopping unit and a tip. `groceryPlan(target)` builds a sample day from a fixed template: lean protein is scaled to the protein target, fats to the fat target, then starches fill the remaining calories, all in half servings. Dinner protein rotates (beef, salmon, shrimp, turkey). The week's list multiplies that out into shopping amounts (lb, dozen, tubs, bags). The plan lands within about 10% of calories and at or above the protein target. Ticks on the list are stored per week on the phone. The coach reads the same list with `get_groceries`.
+
+### Branded snacks
+The plan includes one Goldfish 100-calorie pouch a day. "Snack picks to rotate in" lists branded snacks (Oikos Pro, Core Power, Premier Protein, Chomps, Mini Babybel Light, Rice Krispies Treats), each with the plan item it replaces so the day still adds up. The numbers come from the product labels (checked Nov 2026); they vary a little by flavor.
