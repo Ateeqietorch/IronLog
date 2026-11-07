@@ -462,6 +462,7 @@ const V3_TABLES = {
   Constraints:    ["Id", "UpdatedAt", "JSON"],
   Feedback:       ["Id", "UpdatedAt", "JSON"],
   Directives:     ["Id", "UpdatedAt", "JSON"],
+  Nutrition:      ["Id", "UpdatedAt", "JSON"],
 };
 
 // ── Coach (conversational agent) ───────────────────────────────────────────

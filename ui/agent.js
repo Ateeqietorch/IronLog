@@ -11,7 +11,9 @@
 import {
   state, today, directives, liveDirectives, addDirective, removeDirective, applyProposal, addFeedback, planFor,
   addConstraint, removeConstraint, snapshotState, restoreState, brainSnapshot, ls,
+  nutritionView, setNutrition, logWeight, logIntake,
 } from "./store.js";
+import { GOALS, ACTIVITY } from "../engine/nutrition.js";
 import { active, describe as describeRule } from "../data/constraints.js";
 import { describeDirective, KINDS, TECHNIQUES, niceMuscleName } from "../engine/directives.js";
 import { MUSCLES, PATTERNS } from "../engine/catalog.js";
@@ -122,6 +124,24 @@ export const TOOLS = [
     input_schema: { type: "object", properties: { type: { type: "string", enum: ["avoid_exercise", "avoid_keyword", "joint_flag", "prefer_exercise"] }, target: { type: "string" }, reason: { type: "string" } }, required: ["type", "target"] },
   },
   { name: "remove_rule", description: "Remove a standing rule by id (from context.rules).", input_schema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] } },
+  {
+    name: "get_nutrition",
+    description: "The lifter's nutrition: today's calorie/protein/carb/fat targets, trend weight, current vs goal rate (lb/week), today's logged food, the last check-ins with their reasons, and their profile and goal.",
+    input_schema: { type: "object", properties: {} },
+  },
+  {
+    name: "set_nutrition",
+    description: "Change the nutrition goal or settings. The app recomputes the targets (you never set calories directly): goal type cut | recomp | maintain | gain with ratePct (% bodyweight per week: cut 0.25–1, recomp 0.25, gain 0.1–0.5); proteinPerLb (0.7–1.2, or null for the goal default); activity (low | moderate | high | very). Returns the new targets.",
+    input_schema: { type: "object", properties: {
+      mode: { type: "string", enum: ["apply", "propose"] }, summary: { type: "string" },
+      goal: { type: "string", enum: Object.keys(GOALS) }, ratePct: { type: "number" }, proteinPerLb: { type: "number", description: "0 = the goal default" }, activity: { type: "string", enum: Object.keys(ACTIVITY) },
+    }, required: ["mode"] },
+  },
+  {
+    name: "log_body",
+    description: "Log a weigh-in (lb) and/or what they ate today (calories, protein g) when they tell you in words.",
+    input_schema: { type: "object", properties: { weight: { type: "number" }, kcal: { type: "number" }, protein: { type: "number" }, date: { type: "string" } } },
+  },
   { name: "remember", description: "Save a durable fact about the lifter that isn't a rule or directive (equipment, schedule constraints, injuries history). One short sentence.", input_schema: { type: "object", properties: { note: { type: "string" } }, required: ["note"] } },
   { name: "forget", description: "Delete a remembered note by id.", input_schema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] } },
 ];
@@ -140,6 +160,7 @@ const RULES = [
   "mode: apply when the lifter asked for the change (they can undo it). propose when it's your own idea (they get Apply / Not now). Never claim something changed unless a tool applied it.",
   "Look before you explain: if they ask why a number is what it is, read get_plan or get_exercise and explain the lever and the last session it came from. Be proactive about real problems you see in context (a muscle far under its minimum, pain notes, a stalled lift, sessions over time) and propose the fix.",
   "Evidence you can rely on: ~10+ hard sets per muscle per week, most sets 0–3 reps from failure, 5–30 reps all build muscle when close to failure, rest 90 s+, stretched-position exercises have a small edge, deloads every 4–6 weeks or when performance drops. Never tell them to train through sharp or joint pain; suggest a pain-free alternative and a professional if it persists. Breaks happen; muscle comes back faster the second time, so the best program is the one they can keep doing.",
+  "Nutrition: the app sets daily calories and macros from a resting-burn estimate, then a weekly check-in compares intake (logged, or targets assumed eaten) with the weight trend to find real expenditure, and moves calories ≤250 at a time toward the goal rate (cut 0.5–1%/wk keeps muscle, lean gain 0.25–0.5%/wk). Protein 1 g/lb cutting, 0.9 maintaining, 0.8 gaining; fat ~25% (floor 0.3 g/lb); carbs the rest; never below resting burn. Change goals with set_nutrition; never invent calorie numbers, read get_nutrition. Training and diet interact: in a hard cut, expect strength to hold rather than climb, and suggest a slower rate if performance drops on several muscles. No extreme diets; if they mention restricting, bingeing or purging, be supportive and don't give numbers.",
   "Use add_rule when they don't want an exercise or something hurts; remember for other durable facts. Don't name your tools to the lifter.",
 ].join("\n");
 
@@ -192,6 +213,7 @@ export function contextBlock() {
     program: state.program.days.map((d) => ({ key: d.key, label: d.label, exercises: d.exercises.map((e) => `${e.name} ${e.sets}x${e.repRange?.[0]}-${e.repRange?.[1]}`) })),
     recent: compactRecent(),
     lastAssessment: ls.get("il3:lastAssessment", null),
+    nutrition: nutritionBrief(),
     bodyweight: state.bodyweight,
     memory: memoryCache ?? [],
   };
@@ -202,6 +224,29 @@ export function systemBlocks() {
     { type: "text", text: RULES, cache_control: { type: "ephemeral" } },
     { type: "text", text: "Context (JSON):\n" + JSON.stringify(contextBlock()) },
   ];
+}
+
+function nutritionBrief() {
+  const n = state.nutrition;
+  if (!n.profile) return "not set up";
+  const v = nutritionView();
+  return { goal: n.goal, target: v.target ? `${v.target.kcal} kcal, P${v.target.protein} C${v.target.carbs} F${v.target.fat}` : null, trendWeight: v.trendWeight, rateLbPerWeek: v.rate, goalRateLbPerWeek: v.goalRate, todayEaten: v.today, nextCheckIn: v.nextCheckIn };
+}
+
+function getNutrition() {
+  const n = state.nutrition;
+  if (!n.profile) return { setUp: false, note: "Not set up yet: they set sex, age, height, weight, activity and goal in the Macros tab (or tell you and you can't set the profile; ask them to open Macros)." };
+  const v = nutritionView();
+  return { ...v, checkins: n.checkins.slice(-4).map((c) => ({ date: c.date, kcal: c.kcal, tdee: c.tdee, rate: c.rate, why: c.why })), recentWeights: state.weights.slice(-14), recentFood: n.intake.slice(-7) };
+}
+
+function applyNutrition(input) {
+  const n = state.nutrition;
+  if (!n.profile) return { error: "Nutrition isn't set up yet. Ask them to open the Macros tab once." };
+  const goal = input.goal ? { type: input.goal, ratePct: input.ratePct ?? GOALS[input.goal].default } : input.ratePct != null ? { ...n.goal, ratePct: input.ratePct } : undefined;
+  const c = setNutrition({ ...(goal ? { goal } : {}), ...(input.activity ? { profile: { activity: input.activity } } : {}), ...(input.proteinPerLb !== undefined ? { proteinPerLb: input.proteinPerLb > 0 ? input.proteinPerLb : null } : {}) });
+  const t = nutritionView().target;
+  return { applied: true, targets: t ? `${t.kcal} kcal, protein ${t.protein} g, carbs ${t.carbs} g, fat ${t.fat} g` : null, why: c?.why ?? null };
 }
 
 // ── Tool execution ─────────────────────────────────────────────────────────
@@ -318,6 +363,7 @@ async function forget({ id }) {
 const WRITES = {
   set_directive: { run: applyDirective, label: (i) => describeDirective({ ...i, at: today() }, state.index) },
   remove_directive: { run: ({ id }) => { const d = liveDirectives().find((x) => x.id === id); if (!d) return { error: "No directive with that id." }; removeDirective(id); return { removed: describeDirective(d, state.index), today: todayPlanText() }; }, label: (i) => `Remove: ${describeDirective(liveDirectives().find((x) => x.id === i.id) ?? { kind: "?" }, state.index)}` },
+  set_nutrition: { run: applyNutrition, label: (i) => i.summary || [i.goal ? `Goal: ${GOALS[i.goal]?.label}${i.ratePct ? ` at ${i.ratePct}%/week` : ""}` : i.ratePct != null ? `Rate: ${i.ratePct}%/week` : null, i.proteinPerLb ? `Protein ${i.proteinPerLb} g/lb` : null, i.activity ? `Activity: ${ACTIVITY[i.activity]?.label}` : null].filter(Boolean).join(", ") },
   change_workout: { run: applyWorkout, label: (i) => i.summary || (i.changes ?? []).map((c) => (state.session ? describeChange(state.session, c, state.index) : c.type)).join("; ") },
 };
 
@@ -333,6 +379,14 @@ export async function runTool(name, input, sink) {
       if (!rec.muscle && !rec.exerciseId) return { error: "Need a muscle or an exerciseId." };
       addFeedback(rec);
       return { saved: true, today: todayPlanText() };
+    }
+    case "get_nutrition": return getNutrition();
+    case "log_body": {
+      const out = {};
+      if (input.weight != null) out.weight = logWeight(input.weight, input.date ?? today()) ? "saved" : "looks wrong";
+      if (input.kcal != null || input.protein != null) { logIntake({ kcal: input.kcal ?? null, protein: input.protein ?? null, date: input.date ?? today() }); out.food = "saved"; }
+      const t = nutritionView().target;
+      return { ...out, targets: t ? `${t.kcal} kcal, P${t.protein}` : null };
     }
     case "add_rule": {
       const r = addConstraint({ type: input.type, target: input.target, reason: input.reason, source: "coach" });
@@ -389,7 +443,7 @@ async function step(payload) {
 const STATUS = {
   get_plan: "Reading today's plan", get_exercise: "Looking at your history", get_muscle: "Checking your volume", search_exercises: "Searching exercises",
   set_directive: "Updating your plan", remove_directive: "Updating your plan", change_workout: "Changing the workout", log_feedback: "Noting that",
-  add_rule: "Saving a rule", remember: "Remembering that",
+  add_rule: "Saving a rule", remember: "Remembering that", get_nutrition: "Checking your nutrition", set_nutrition: "Updating your targets", log_body: "Logging that",
 };
 
 // history: earlier turns as [{ role, content: text }]. Returns

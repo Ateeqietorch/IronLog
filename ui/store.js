@@ -8,7 +8,8 @@ import { blockFor } from "../engine/block.js";
 import { resolveDirectives, cleanDirective, mergeDirectives, activeDirectives } from "../engine/directives.js";
 import { mesoWeek } from "../engine/meso.js";
 import { tables } from "../data/sheets.js";
-import { readLog, readBodyweight, writeSession, dedupeLog, rowToObject, objectToRow } from "../data/log.js";
+import { readLog, readBodyweightHistory, writeBodyweight, writeSession, dedupeLog, rowToObject, objectToRow } from "../data/log.js";
+import { checkIn, checkInDue, cleanWeights, summary as nutritionSummary } from "../engine/nutrition.js";
 import { loadProgram, replaceSlot, updateSlot, insertSlot, saveProgramStorage, readProgramStorage } from "../data/program.js";
 import { newTrial, applyTrials, recordSession, resolveTrial } from "../data/trials.js";
 import { buildSession, toRows, applyChanges, planOne } from "./session.js";
@@ -18,7 +19,7 @@ import { muscleState, recovered, chooseNextDay } from "../engine/recovery.js";
 import { assessSession } from "../engine/assess.js";
 import { withDefaults, mergeConstraints, active, cleanConstraint } from "../data/constraints.js";
 
-const K = { session: "il3:session", log: "il3:logCache", meso: "il3:meso", settings: "il3:settings", pending: "il3:pending", bw: "il3:bodyweight", trials: "il3:trials", own: "il3:ownExercises", constraints: "il3:constraints", feedback: "il4:feedback", directives: "il4:directives" };
+const K = { session: "il3:session", log: "il3:logCache", meso: "il3:meso", settings: "il3:settings", pending: "il3:pending", bw: "il3:bodyweight", trials: "il3:trials", own: "il3:ownExercises", constraints: "il3:constraints", feedback: "il4:feedback", directives: "il4:directives", nutrition: "il4:nutrition", weights: "il4:weights", weightsPending: "il4:weightsPending" };
 
 export const ls = {
   get(k, fallback = null) { try { const v = localStorage.getItem(k); return v == null ? fallback : JSON.parse(v); } catch { return fallback; } },
@@ -38,6 +39,9 @@ export const state = {
   // Coach brain inputs (engine/brain.js): normalized sets, per-muscle
   // feedback, and standing directives from you or the coach.
   normSets: [], feedback: [], directives: [], plan: null,
+  // Nutrition (engine/nutrition.js): profile + goal, weekly check-ins,
+  // optional daily intake, and every weigh-in.
+  nutrition: { profile: null, goal: null, proteinPerLb: null, checkins: [], intake: [] }, weights: [],
 };
 
 export function emit() { for (const f of state.listeners) f(state); }
@@ -85,6 +89,7 @@ export async function boot({ fixture = null } = {}) {
     }).catch(() => {});
     // Feedback and directives live on the phone first and back up to the
     // sheet (older backends don't have these tables; that's fine).
+    syncNutrition().then(() => runCheckIn());
     tables.list("Directives").then((recs) => {
       const remote = recs.map((r) => r.value).filter((d) => d?.id);
       const merged = mergeDirectives(remote, state.directives);
@@ -112,19 +117,26 @@ export async function boot({ fixture = null } = {}) {
   }
   state.index = indexCatalog(mergeCatalogs(own, CURATED));
 
+  state.nutrition = { ...state.nutrition, ...ls.get(K.nutrition, {}) };
   if (fixture) {
     state.rows = fixture.rows; state.bodyweight = fixture.bodyweight ?? null;
+    state.weights = fixture.weights ?? (fixture.bodyweight ? [{ date: today(), weight: fixture.bodyweight }] : []);
   } else {
     try {
-      const [rows, bw] = await Promise.all([readLog(), readBodyweight()]);
-      state.rows = rows; state.bodyweight = bw;
-      ls.set(K.log, rows); if (bw) ls.set(K.bw, bw);
+      const [rows, ws] = await Promise.all([readLog(), readBodyweightHistory().catch(() => null)]);
+      state.rows = rows;
+      state.weights = cleanWeights([...(ws ?? ls.get(K.weights, [])), ...ls.get(K.weightsPending, [])]);
+      const bw = state.weights.length ? state.weights[state.weights.length - 1].weight : null;
+      state.bodyweight = bw;
+      ls.set(K.log, rows); if (bw) ls.set(K.bw, bw); ls.set(K.weights, state.weights);
+      flushWeights();
       // Earlier versions could save a workout more than once; clean the sheet.
       if (rows.duplicates > 0) dedupeLog().catch(() => {});
     } catch (err) {
       state.offline = true;
       state.rows = ls.get(K.log, []);
       state.bodyweight = ls.get(K.bw, null);
+      state.weights = cleanWeights([...ls.get(K.weights, []), ...ls.get(K.weightsPending, [])]);
     }
   }
   // Sets saved on this phone but not yet in the sheet still count.
@@ -144,6 +156,7 @@ export async function boot({ fixture = null } = {}) {
     const pick = suggestNext(today());
     startDay(pick.day.key, { persist: false, selection: pick.reason });
   }
+  runCheckIn();
   emit();
   if (pending.length && !fixture) retryPending();
 }
@@ -613,6 +626,7 @@ export function snapshotState() {
     directives: structuredClone(state.directives), constraints: structuredClone(state.constraints),
     trials: structuredClone(state.trials), session: structuredClone(state.session),
     program: structuredClone(readProgramStorage()), feedback: structuredClone(state.feedback), own: ls.get(K.own, []),
+    nutrition: structuredClone(state.nutrition),
   };
 }
 export function restoreState(snap) {
@@ -622,6 +636,7 @@ export function restoreState(snap) {
   state.constraints = snap.constraints; ls.set(K.constraints, snap.constraints);
   tables.upsert("Constraints", snap.constraints.map((c) => ({ key: c.id, value: c }))).catch(() => {});
   state.feedback = snap.feedback; ls.set(K.feedback, snap.feedback);
+  if (snap.nutrition) { state.nutrition = snap.nutrition; saveNutrition(); }
   // Directives keep tombstones so a removal syncs: anything added since the
   // snapshot is marked removed rather than dropped.
   const before = new Set(snap.directives.map((d) => d.id));
@@ -631,4 +646,104 @@ export function restoreState(snap) {
   saveDraft();
   if (state.session && !state.session.saved && !anyLoggedIn(state.session)) refreshToday();
   emit();
+}
+
+
+// ── Nutrition ──────────────────────────────────────────────────────────────
+function saveNutrition() {
+  ls.set(K.nutrition, state.nutrition);
+  const n = state.nutrition;
+  tables.upsert("Nutrition", [
+    { key: "settings", value: { profile: n.profile, goal: n.goal, proteinPerLb: n.proteinPerLb } },
+    { key: "checkins", value: { list: n.checkins.slice(-60) } },
+    { key: "intake", value: { list: n.intake.slice(-120) } },
+  ]).catch(() => {});
+}
+
+// Pull the sheet copy when this phone has none (new phone, cleared browser).
+export async function syncNutrition() {
+  try {
+    const recs = await tables.list("Nutrition");
+    const by = Object.fromEntries(recs.map((r) => [r.key, r.value]));
+    const n = state.nutrition;
+    if (!n.profile && by.settings?.profile) {
+      state.nutrition = { ...n, ...by.settings, checkins: by.checkins?.list ?? [], intake: by.intake?.list ?? [] };
+      ls.set(K.nutrition, state.nutrition);
+      emit();
+    } else if (n.profile) saveNutrition();
+  } catch { /* older backend: phone only */ }
+}
+
+export function nutritionView(date = today()) {
+  const n = state.nutrition;
+  return nutritionSummary({ profile: n.profile, goal: n.goal, weights: state.weights, intake: n.intake, checkins: n.checkins, date });
+}
+
+// Run the weekly check-in if it's due. Returns the new check-in or null.
+export function runCheckIn({ force = false, goalChange = false } = {}) {
+  const n = state.nutrition;
+  if (!n.profile || !n.goal || !state.weights.length) return null;
+  const date = today();
+  if (!force && !goalChange && !checkInDue(n.checkins, date)) return null;
+  const c = checkIn({ profile: n.profile, goal: n.goal, weights: state.weights, intake: n.intake, checkins: n.checkins.filter((x) => x.date < date), date, proteinPerLb: n.proteinPerLb, goalChange });
+  if (!c) return null;
+  state.nutrition = { ...n, checkins: [...n.checkins.filter((x) => x.date !== date), c] };
+  saveNutrition();
+  emit();
+  return c;
+}
+
+// Profile/goal changes. A new goal re-targets today; profile edits only
+// matter for the very first estimate.
+export function setNutrition({ profile, goal, proteinPerLb } = {}) {
+  const n = state.nutrition;
+  const goalChanged = goal && JSON.stringify(goal) !== JSON.stringify(n.goal);
+  state.nutrition = { ...n, ...(profile ? { profile: { ...n.profile, ...profile } } : {}), ...(goal ? { goal } : {}), ...(proteinPerLb !== undefined ? { proteinPerLb } : {}) };
+  saveNutrition();
+  const fresh = !n.checkins.length;
+  const c = runCheckIn({ goalChange: !fresh && (goalChanged || proteinPerLb !== undefined), force: fresh });
+  emit();
+  return c;
+}
+
+export function logWeight(weight, date = today()) {
+  const w = Number(weight);
+  if (!(w > 50 && w < 700)) return false;
+  state.weights = cleanWeights([...state.weights.filter((x) => x.date !== date), { date, weight: w }]);
+  if (date === state.weights[state.weights.length - 1].date) state.bodyweight = w;
+  ls.set(K.weights, state.weights); ls.set(K.bw, state.bodyweight);
+  ls.set(K.weightsPending, [...ls.get(K.weightsPending, []).filter((x) => x.date !== date), { date, weight: w }]);
+  flushWeights();
+  runCheckIn();
+  emit();
+  return true;
+}
+
+// One flush at a time; a weigh-in logged mid-flush is picked up by a rerun,
+// so two quick edits on the same day can't land in the wrong order.
+let flushing = null, flushAgain = false;
+export function flushWeights() {
+  if (flushing) { flushAgain = true; return flushing; }
+  flushing = (async () => {
+    do {
+      flushAgain = false;
+      for (const p of ls.get(K.weightsPending, [])) {
+        try {
+          await writeBodyweight(p.date, p.weight);
+          ls.set(K.weightsPending, ls.get(K.weightsPending, []).filter((x) => !(x.date === p.date && x.weight === p.weight)));
+        } catch { flushAgain = false; break; }
+      }
+    } while (flushAgain);
+  })().finally(() => { flushing = null; });
+  return flushing;
+}
+
+export function logIntake({ kcal = null, protein = null, date = today() } = {}) {
+  const n = state.nutrition;
+  const prev = n.intake.find((x) => x.date === date) ?? { date };
+  const rec = { ...prev, ...(kcal != null && kcal !== "" ? { kcal: Number(kcal) } : {}), ...(protein != null && protein !== "" ? { protein: Number(protein) } : {}) };
+  state.nutrition = { ...n, intake: [...n.intake.filter((x) => x.date !== date), rec].sort((a, b) => a.date.localeCompare(b.date)).slice(-180) };
+  saveNutrition();
+  emit();
+  return rec;
 }

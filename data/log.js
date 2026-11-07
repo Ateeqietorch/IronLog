@@ -40,6 +40,20 @@ export async function readLog(opts) {
   return rowsToObjects(d.rows);
 }
 
+// Every weigh-in, oldest first.
+export async function readBodyweightHistory(opts) {
+  const d = await get("read_bodyweight", {}, opts);
+  return (d.rows ?? []).slice(1).filter((r) => r[0] && Number(r[1]) > 0)
+    .map((r) => ({ date: cleanDate(r[0]), weight: Number(r[1]) }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+}
+
+// One weigh-in per day: replaces that day's entry.
+export async function writeBodyweight(date, weight, opts) {
+  await get("delete_bodyweight", { date }, opts);
+  await get("write_bodyweight", { date, weight: String(weight) }, opts);
+}
+
 export async function readBodyweight(opts) {
   try {
     const d = await get("read_bodyweight", {}, opts);

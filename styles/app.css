@@ -247,3 +247,13 @@ body:not([data-tab="train"]) .app.resting { padding-bottom: calc(68px + env(safe
 .check-line span { -webkit-line-clamp: 2; }
 .check-line .ti-chevron-right { margin-left: auto; color: var(--steel); }
 .chips.fb .chip { height: auto; min-height: 36px; padding: 4px; line-height: 1.15; font-size: 12.5px; }
+
+/* macros tab */
+.macros { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 12px; }
+.macro { background: var(--plate-deep); border: 1px solid var(--seam); border-radius: var(--r-control); padding: 8px 10px; min-width: 0; }
+.nu-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(92px, 1fr)); gap: 8px; }
+.nu-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--steel); }
+.nu-grid input { height: 44px; border-radius: var(--r-control); border: 1px solid var(--seam); background: var(--plate-deep); color: var(--silver); font-size: 18px; padding: 0 10px; width: 100%; box-sizing: border-box; }
+.spark { width: 100%; height: 70px; margin-top: 8px; display: block; }
+.spark .sp-line { fill: none; stroke: var(--red); stroke-width: 2; }
+.spark .sp-dot { fill: var(--steel); }

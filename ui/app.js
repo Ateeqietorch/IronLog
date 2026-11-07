@@ -3,11 +3,12 @@ import { state, boot, subscribe, retryPending } from "./store.js";
 import { renderTrain } from "./train.js";
 import { renderHistory, renderProgress } from "./tabs.js";
 import { renderCoach } from "./coach.js";
+import { renderNutrition } from "./nutrition.js";
 import { setHaptics, toast } from "./dom.js";
 
 const view = document.getElementById("view");
 let tab = "train";
-const renderers = { train: renderTrain, history: renderHistory, progress: renderProgress, coach: renderCoach };
+const renderers = { train: renderTrain, history: renderHistory, progress: renderProgress, macros: renderNutrition, coach: renderCoach };
 
 function render() {
   document.body.dataset.tab = tab; // the rest dock only shows on Train

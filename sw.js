@@ -1,4 +1,4 @@
-const CACHE_NAME = "ironlog-shell-v14";
+const CACHE_NAME = "ironlog-shell-v15";
 const SHELL_FILES = [
   "./",
   "./index.html",
@@ -43,7 +43,9 @@ const SHELL_FILES = [
   "./engine/block.js",
   "./engine/directives.js",
   "./engine/brain.js",
-  "./ui/agent.js"
+  "./ui/agent.js",
+  "./engine/nutrition.js",
+  "./ui/nutrition.js"
 ];
 
 self.addEventListener("install", (event) => {

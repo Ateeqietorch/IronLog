@@ -1,5 +1,12 @@
 # Decisions log
 
+## Macros tab — 2026-11-07 (NUTRITION.md)
+Ateeq: wants recommended daily macros that adjust to a weight loss or gain goal.
+- **Adaptive, MacroFactor-style**: formula start, then weekly check-ins from intake and the weight trend. Food logging is optional (calories + protein only, no food database): with no logs the check-in assumes targets were eaten and trusts the result less (30% vs 50% step).
+- **Guardrails**: ≤250 kcal change per check-in, floor at resting burn, cut rates capped at 1%/wk. Coach prompt avoids numbers if restriction/bingeing comes up.
+- **Weigh-ins reuse the Bodyweight sheet** via the existing GET actions (no backend change needed for weights); everything else is local-first with a Nutrition table backup.
+- **Coach** reads nutrition and changes goals through the same engine (set_nutrition with Undo; never sets calories directly), and can log weight/food said in words.
+
 ## Coach brain (engine v4) — 2026-11-06 (COACH-BRAIN.md)
 Ateeq: not getting more jacked; the coach is disconnected from the weight/rep calculator; weight and reps going up on a schedule is one-dimensional.
 - **One planner for the whole session** (`engine/brain.js`): block week and effort, sets per muscle, sets per exercise, an add-on for a lagging small muscle, a lever per exercise, a time fit, and exercise order. The Train screen, the Plan tab and the coach all read it.

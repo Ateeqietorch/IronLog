@@ -87,6 +87,7 @@ export function buildContext() {
 
 const PROMPTS = [
   "Why are these my numbers today?",
+  "Am I losing fat at the right rate?",
   "Prioritize my side delts",
   "No sets under 8 reps",
   "I only have 45 minutes",
