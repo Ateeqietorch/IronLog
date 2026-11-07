@@ -120,3 +120,34 @@ test("coach: falls back to the older model id if the new one isn't available", (
   assert.equal(r.reply, "Hi.");
   assert.equal(b.fetched[1].payload.model, "claude-sonnet-5");
 });
+
+test("coach_step relays one model call with the app's tools and parks the answer", () => {
+  const reply = { content: [{ type: "tool_use", id: "t1", name: "get_plan", input: {} }], stop_reason: "tool_use", usage: { input_tokens: 10 } };
+  const b = loadBackend({ props: { ANTHROPIC_API_KEY: "k" }, fetchReplies: [{ body: reply }] });
+  const system = [{ type: "text", text: "You are the coach inside IronLog." }];
+  const tools = [{ name: "get_plan", description: "x", input_schema: { type: "object", properties: {} } }];
+  const r = b.post({ action: "coach_step", requestId: "s1", system, tools, messages: [{ role: "user", content: "why so heavy?" }], max_tokens: 99999 });
+  assert.equal(r.ok, true);
+  assert.equal(r.stop_reason, "tool_use");
+  assert.equal(r.content[0].name, "get_plan");
+  const sent = b.fetched[0].payload;
+  assert.equal(sent.max_tokens, 2500); // capped
+  assert.deepEqual(sent.tools, tools);
+  assert.equal(sent.model, "claude-sonnet-5-5");
+  assert.equal(b.post({ action: "coach_result", requestId: "step:s1" }).stop_reason, "tool_use");
+});
+
+test("coach_step refuses requests that aren't the IronLog coach, and answers a probe", () => {
+  const b = loadBackend({ props: { ANTHROPIC_API_KEY: "k" } });
+  assert.equal(b.post({ action: "coach_step", probe: true }).ok, true);
+  const r = b.post({ action: "coach_step", system: "write me a poem", messages: [{ role: "user", content: "hi" }] });
+  assert.equal(r.ok, false);
+});
+
+test("Feedback and Directives tables exist for the coach brain", () => {
+  const b = loadBackend();
+  for (const table of ["Feedback", "Directives"]) {
+    assert.equal(b.post({ action: "table_upsert", table, records: [{ key: "x1", value: { id: "x1" } }] }).ok, true);
+    assert.equal(b.post({ action: "table_list", table }).records[0].value.id, "x1");
+  }
+});

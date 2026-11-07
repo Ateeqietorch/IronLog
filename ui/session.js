@@ -1,9 +1,10 @@
 // Session state for the Train screen. No DOM here, so it's testable in Node.
 // Every number comes from engine/prescribe.js; this file only keeps track of
 // which set you're on and turns the finished session into sheet rows.
-import { newModel, updateModel, loadFor, defaultK } from "../engine/model.js";
+import { newModel, updateModel, loadFor, defaultK, e1rm } from "../engine/model.js";
 import { prescribe, recalcRemaining, ladderFor, aimReps, toEffective } from "../engine/prescribe.js";
 import { targetRir, deloadSets } from "../engine/meso.js";
+import { planExercise as brainPlanExercise } from "../engine/brain.js";
 import { ENGINE_VERSION } from "../engine/index.js";
 
 export const modelFor = (models, id, side = "both") => models[`${id}|${side}`];
@@ -26,15 +27,26 @@ export function coldModel(ex, programWeight, repRange) {
   return newModel(ex.id, { kClass: ex.kClass, k, e1rm: programWeight * (1 + (mid + 2) / k), sd: 0.15 });
 }
 
-export function planExercise({ slot, ex, models, date, weekInfo, bodyweight, policy, gymProfile }) {
-  const baseRir = targetRir(weekInfo, ex);
-  const sets = weekInfo.deload ? deloadSets(slot.sets) : slot.sets;
+export function planExercise({ slot, ex, models, date, weekInfo, bodyweight, policy, gymProfile, rir = null, seed = null, presized = false }) {
+  const baseRir = rir ?? targetRir(weekInfo, ex);
+  const sets = weekInfo.deload && !presized ? deloadSets(slot.sets) : slot.sets;
   const common = { exercise: ex, repRange: slot.repRange, rir: baseRir, sets, date, bodyweight, policy, gymProfile, deload: weekInfo.deload };
   const found = modelsForExercise(models, ex);
   if (found.model || found.models) {
     const plan = prescribe({ ...common, ...found, lastLoad: lastLoadOf(found.model ?? Object.values(found.models)[0]) });
     if (!plan.needsCalibration && !plan.needsBodyweight) return { plan, mode: "coached", ...found };
     if (plan.needsBodyweight) return { plan: null, mode: "manual", note: "Log your bodyweight in the classic view so weighted dips and pull-ups can be coached." };
+  }
+  // A starting point the coach gave for this exercise (its estimate from
+  // related lifts), else the weight in your old program.
+  if (seed?.load > 0 && !["bodyweight-plus", "assisted"].includes(ex.loadType)) {
+    const k = defaultK(ex.kClass);
+    const model = newModel(ex.id, { kClass: ex.kClass, k, e1rm: seed.load * (1 + (seed.reps + (seed.rir ?? 2)) / k), sd: 0.15 });
+    const plan = prescribe({ ...common, model, rir: baseRir + 1 });
+    if (!plan.needsCalibration) {
+      plan.text = `Starting from your coach's estimate (${seed.load} × ${seed.reps}). Set 1 checks it with a rep to spare; the rest adjust to how it goes.`;
+      return { plan, mode: "calibrating", model };
+    }
   }
   if (slot.programWeight > 0 && !["bodyweight-plus", "assisted"].includes(ex.loadType)) {
     const model = coldModel(ex, slot.programWeight, slot.repRange);
@@ -45,7 +57,40 @@ export function planExercise({ slot, ex, models, date, weekInfo, bodyweight, pol
   return { plan: null, mode: "manual", note: "No history yet. Pick a weight you could do for the top of the range with a few reps left; set 1 calibrates the rest." };
 }
 
-export function buildSession({ day, index, models, date, weekInfo, bodyweight = null, policy = "balanced", gymProfile = null }) {
+// The brain's decision for one exercise as a plan the Train screen and the
+// in-session recalculation understand.
+export function decisionToPlan(d, { ex, rir, models: found = {}, bodyweight = null }) {
+  const m = found.model ?? null;
+  let side = null;
+  if (found.models) {
+    const live = Object.entries(found.models).filter(([, x]) => x?.logE1rm != null).sort((a, b) => a[1].logE1rm - b[1].logE1rm);
+    side = live[0]?.[0] ?? null;
+  }
+  const model = m ?? (side ? found.models[side] : null);
+  const sets = d.sets.map((x) => ({ index: x.index, load: x.load, reps: x.reps, rir: x.rir, last: !!x.last, ...(x.backoff ? { backoff: true } : {}) }));
+  return {
+    load: d.load, effLoad: toEffective(ex, d.load, bodyweight ?? 0), sets, lever: d.lever, technique: d.reason?.technique ?? null,
+    reason: { ...d.reason, rir, baseRir: rir, e1rm: model?.logE1rm != null ? Math.round(e1rm(model) * 10) / 10 : null, changePct: null, load: d.load, side, outOfRange: false },
+    text: d.text,
+  };
+}
+
+// Plan one exercise through the brain (levers, effort, sets). Falls back to
+// the cold start when there's no history. ctx: { sets, block, directives }.
+export function planOne({ slot, ex, models, date, weekInfo, bodyweight = null, policy = "balanced", gymProfile = null, ctx, nSets = null, decided = null }) {
+  const found = modelsForExercise(models, ex);
+  const it = decided ?? brainPlanExercise({ ex, slot, nSets: nSets ?? slot.sets, date, sets: ctx.sets, models, block: ctx.block, directives: ctx.directives, gymProfile, bodyweight });
+  const d = it.decision;
+  if (d.lever === "calibrate" || !d.sets?.length) {
+    const p = planExercise({ slot: { ...slot, sets: it.sets, repRange: it.repRange }, ex, models, date, weekInfo, bodyweight, policy, gymProfile, rir: it.rir, seed: ctx.directives?.seeds?.[ex.id] ?? null, presized: true });
+    return { ...p, rir: it.rir, repRange: it.repRange, sets: p.plan?.sets.length ?? it.sets, lever: "calibrate", label: "Calibrate" };
+  }
+  const plan = decisionToPlan(d, { ex, rir: it.rir, models: found, bodyweight });
+  return { plan, mode: "coached", ...found, rir: it.rir, repRange: it.repRange, sets: plan.sets.length, lever: d.lever, label: it.label };
+}
+
+export function buildSession({ day, index, models, date, weekInfo, bodyweight = null, policy = "balanced", gymProfile = null, brain = null, ctx = null }) {
+  if (brain) return buildFromBrain({ day, index, models, date, bodyweight, policy, gymProfile, brain, ctx });
   const exercises = day.exercises.map((slot, i) => {
     const ex = slot.exerciseId ? index.byId.get(slot.exerciseId) : null;
     const slotIndex = slot.origIndex ?? i;
@@ -59,7 +104,38 @@ export function buildSession({ day, index, models, date, weekInfo, bodyweight = 
   };
 }
 
+// A session from the brain's plan (engine/brain.js planDay): exercise order,
+// set counts, levers, supersets and add-ons all come from it.
+function buildFromBrain({ day, index, models, date, bodyweight, policy, gymProfile, brain, ctx }) {
+  const weekInfo = brain.weekInfo;
+  // Superset partners share a group number (positions shift when exercises
+  // are added, moved or skipped; the group doesn't).
+  const group = new Map();
+  (brain.supersets ?? []).forEach(([a, b], n) => { group.set(a, n + 1); group.set(b, n + 1); });
+  const exercises = brain.exercises.map((it, pos) => {
+    const slot = { ...it.slot, sets: it.sets, repRange: it.repRange ?? it.slot.repRange };
+    const base = { i: pos, slotIndex: it.slotIndex, slot, name: it.slot.name, logged: [], ...(it.addOn ? { addOn: it.addOn } : {}),
+      ...(group.has(it.key) ? { superset: group.get(it.key) } : {}) };
+    if (!it.ex) return { ...base, ex: null, mode: "manual", plan: null, sets: slot.sets, note: "This exercise isn't in the catalog yet, so it's logged without coaching." };
+    const p = planOne({ slot, ex: it.ex, models, date, weekInfo, bodyweight, policy, gymProfile, ctx, decided: it });
+    return { ...base, ex: it.ex, ...p, slot: { ...slot, sets: p.sets } };
+  });
+  return {
+    date, dayKey: day.key, dayLabel: day.label, sessionKey: `${date}_${day.key}`,
+    weekInfo, block: brain.block, minutes: brain.minutes, budget: brain.budget, exercises, cur: 0, bodyweight, policy, gymProfile, startedAt: null, saved: false,
+    engine: "brain",
+  };
+}
+
 export const isDone = (e) => e.logged.length >= e.sets;
+
+// The other half of an exercise's superset, if it has one.
+export function partnerOf(s, i) {
+  const e = s.exercises[i];
+  if (!e?.superset) return null;
+  const j = s.exercises.findIndex((x, k) => k !== i && x.superset === e.superset);
+  return j >= 0 ? j : null;
+}
 
 export function currentSetIndex(e) {
   return e.logged.length;
@@ -110,7 +186,10 @@ export function logSet(session, exIdx, entry, now = null) {
       }
     }
   }
-  if (isDone(e)) s.cur = nextUndone(s, exIdx);
+  // Supersets alternate: after a set of one, go to the other if it has sets left.
+  const partner = partnerOf(s, exIdx);
+  if (partner != null && !isDone(s.exercises[partner])) s.cur = partner;
+  else if (isDone(e)) s.cur = nextUndone(s, exIdx);
   return s;
 }
 
@@ -319,11 +398,15 @@ export function validateChange(s, c, index, program) {
 }
 
 // Apply a list of changes to today's session (not the program).
-export function applyChanges(session, changes, { index, models }) {
+export function applyChanges(session, changes, { index, models, ctx = null }) {
   let s = structuredClone(session);
   const wk = s.weekInfo;
   const replan = (e, slot) => {
     const ex = index.byId.get(slot.exerciseId);
+    if (ctx && ex) {
+      const p = planOne({ slot, ex, models, date: s.date, weekInfo: wk, bodyweight: s.bodyweight, policy: s.policy, gymProfile: s.gymProfile, ctx: { ...ctx, block: ctx.block ?? s.block }, nSets: slot.sets });
+      return { ...e, slot: { ...slot, sets: p.sets }, ex, name: slot.name, ...p, model: p.model, models: p.models };
+    }
     const p = planExercise({ slot, ex, models, date: s.date, weekInfo: wk, bodyweight: s.bodyweight, policy: s.policy, gymProfile: s.gymProfile });
     return { ...e, slot, ex, name: slot.name, ...p, model: p.model, models: p.models, sets: p.plan?.sets.length ?? slot.sets };
   };

@@ -1,5 +1,8 @@
 // History, Progress, Coach, and Settings (DESIGN-SPEC.md §4, §5.8, §5.9).
-import { state, setSettings, newBlock, updateSessionNotes } from "./store.js";
+import { state, setSettings, newBlock, deloadNow, updateSessionNotes, liveDirectives, removeDirective, addDirective, directives as resolved, planFor, suggestNext, today } from "./store.js";
+import { describeDirective, niceMuscleName } from "../engine/directives.js";
+import { GROWN } from "../engine/volume.js";
+import { rirFor } from "../engine/block.js";
 import { e1rm } from "../engine/model.js";
 import { esc, sheet, closeSheet, fmtDate, setHaptics, toast } from "./dom.js";
 import { isIOS, notifySupported, requestNotify, testAlert, runIosTimer } from "./rest.js";
@@ -61,20 +64,118 @@ function historyNotesSheet(s, dayLabel) {
   });
 }
 
+let showAllLifts = false;
+// Plan tab: the block, your schedule, every muscle's volume against its
+// target, and the standing directives the coach plans with.
 export function renderProgress(root) {
+  const plan = state.plan ?? (() => { try { return planFor(suggestNext(today()).day.key).plan; } catch { return null; } })();
+  const dir = resolved();
+  const b = plan?.block;
+  const rir = b ? rirFor(b, { kClass: "isolation" }) : null;
+  const blockCard = b ? `<section class="card plan-card">
+      <div class="label" style="margin-top:0"><i class="ti ti-stairs-up" aria-hidden="true"></i> Training block ${b.number ?? 1}</div>
+      <div class="ex-name">${b.deload ? "Deload week" : b.reentry ? "Re-entry week" : `Week ${b.week} of ${b.of}`}</div>
+      <p class="review-txt">${b.deload ? "Same exercises, half the sets, about 4 reps short of failure. Then a new block starts." : `Sets end about ${rir} rep${rir === 1 ? "" : "s"} short of failure this week (compounds never closer than 1). Started ${esc(fmtDate(b.start))}${b.paused ? `, paused ${b.paused} days for breaks` : ""}. Deload after week ${b.of}.`}</p>
+      <div class="prop-acts">
+        <button class="secondary" id="pl-deload" style="height:44px">Deload now</button>
+        <button class="secondary" id="pl-block" style="height:44px">New block</button>
+      </div>
+    </section>` : "";
+
+  const sched = `<div class="group-title">Schedule</div><div class="rows">
+      <button class="list-btn" id="pl-days"><span>Days a week</span><span class="mut">${dir.schedule.daysPerWeek ?? `about ${plan?.daysPerWeek ?? "—"} (from your log)`} <i class="ti ti-chevron-right" aria-hidden="true"></i></span></button>
+      <button class="list-btn" id="pl-mins"><span>Minutes per workout</span><span class="mut">${dir.schedule.minutes ?? `${plan?.budget ?? 75} (default)`} <i class="ti ti-chevron-right" aria-hidden="true"></i></span></button>
+    </div>`;
+
+  const muscles = plan ? Object.entries(plan.muscles).filter(([m]) => GROWN.includes(m) || plan.muscles[m].level !== "indirect") : [];
+  const bar = (x) => {
+    const max = Math.max(x.max, x.done7, x.weeklyTarget, 1);
+    const pct = (v) => Math.min(100, Math.round((v / max) * 100));
+    return `<div class="vbar" aria-hidden="true"><i class="done ${x.status}" style="width:${pct(x.done7)}%"></i><b style="left:${pct(x.floor)}%"></b><b class="tgt" style="left:${pct(x.weeklyTarget)}%"></b></div>`;
+  };
+  const live = state.session && !state.session.saved;
+  const muscleRows = muscles.map(([m, x]) => `<button class="row mrow" data-muscle="${esc(m)}"><span>${esc(cap(niceMuscleName(m)))}${x.level === "specialize" ? ` <span class="pill lever up">Priority</span>` : x.level === "maintain" ? ` <span class="pill">Maintain</span>` : ""}<br><span class="mut" style="font-size:12px">~${Math.round(x.perSession)} sets a session · ${x.freq < 1 ? "less than once a week" : `${Math.round(x.freq * 10) / 10}× a week`}${live && x.today >= 1 ? ` · ${Math.round(x.today)} today` : ""}</span>${bar(x)}</span><span class="r"><span class="num" style="font-size:22px;color:var(--silver)">${Math.round(x.done7)}</span><br>of ~${Math.round(x.weeklyTarget)}/wk</span></button>`).join("");
+  const volume = plan ? `<div class="group-title">Sets per muscle, last 7 days</div>
+    <div class="mut" style="font-size:13px;margin:-4px 0 8px">Bar: done. Line: minimum to grow. Red tick: this week's target, which moves with your feedback after each workout.</div>
+    <div class="rows">${muscleRows}</div>` : "";
+
+  const dirsLive = liveDirectives();
+  const dirRows = dirsLive.map((d) => `<div class="rule-row"><span>${esc(describeDirective(d, state.index))}<br><span class="mut">${d.source === "coach" ? "Set by your coach" : "Set by you"}${d.at ? ` · ${esc(fmtDate(d.at))}` : ""}${d.note ? ` · ${esc(d.note)}` : ""}</span></span><button class="icon-btn" data-rmdir="${esc(d.id)}" aria-label="Remove"><i class="ti ti-x" aria-hidden="true"></i></button></div>`).join("");
+  const dirs = `<div class="group-title">Coaching rules</div>
+    <div class="mut" style="font-size:13px;margin:-4px 0 8px">The engine plans every workout with these. Ask the coach to add one ("no sets under 8 reps", "prioritize side delts"), or use the buttons.</div>
+    <div class="rows">${dirRows || `<div class="row mut">None yet.</div>`}</div>
+    <div class="prop-acts" style="margin-top:10px">
+      <button class="secondary" id="pl-prio" style="height:44px">Prioritize a muscle</button>
+      <button class="secondary" id="pl-floor" style="height:44px">Minimum reps</button>
+    </div>`;
+
   const entries = Object.entries(state.models)
     .filter(([, m]) => m.logE1rm != null)
     .map(([key, m]) => {
       const [id, side] = key.split("|");
-      const first = m.obs.find((o) => o.rirKnown) ?? m.obs[0];
-      return { id, side, m, e: e1rm(m), last: m.lastExposure, n: m.exposures, first };
+      return { id, side, m, e: e1rm(m), last: m.lastExposure, n: m.exposures };
     })
     .sort((a, b) => String(b.last).localeCompare(String(a.last)));
-  const st = state.stats;
-  const acc = st?.maeSettled != null ? `<div class="notice">How well the coach predicts your reps: within about <b>±${st.maeSettled}</b> reps once it has 3 sessions on an exercise. It gets sharper as you log reps-in-reserve on every set.</div>` : "";
-  const rows = entries.map((x) => `<div class="row"><span>${esc(nameOf(x.id))}${x.side !== "both" ? ` (${x.side})` : ""}<br><span class="mut" style="font-size:13px">${x.n} sessions · last ${x.last ? esc(fmtDate(x.last)) : "—"}</span></span><span class="r"><span class="num" style="font-size:22px;color:var(--silver)">${Math.round(x.e)}</span><br>est. 1-rep max</span></div>`).join("");
-  root.innerHTML = `<header class="p-head"><h1>Progress</h1>${gear}</header>${acc}<div class="group-title">Strength by exercise, most recent first</div><div class="rows">${rows || `<div class="row">Log a workout to see your strength estimates.</div>`}</div><div style="height:16px"></div>`;
+  const lifts = entries.slice(0, showAllLifts ? entries.length : 10).map((x) => `<div class="row"><span>${esc(nameOf(x.id))}${x.side !== "both" ? ` (${x.side})` : ""}<br><span class="mut" style="font-size:13px">${x.n} sessions · last ${x.last ? esc(fmtDate(x.last)) : "—"}</span></span><span class="r"><span class="num" style="font-size:22px;color:var(--silver)">${Math.round(x.e)}</span><br>est. 1-rep max</span></div>`).join("");
+
+  root.innerHTML = `<header class="p-head"><h1>Plan</h1>${gear}</header>
+    ${blockCard}
+    ${plan?.deloadSignal && !b?.deload ? `<div class="notice warn">${esc(plan.deloadSignal.reason)} Consider a deload.</div>` : ""}
+    ${sched}
+    ${volume}
+    ${dirs}
+    <div class="group-title">Strength by exercise, most recent first</div><div class="rows">${lifts || `<div class="row">Log a workout to see your strength estimates.</div>`}</div>
+    ${entries.length > 10 && !showAllLifts ? `<button class="link" id="pl-all" style="margin:8px 16px">Show all ${entries.length}</button>` : ""}<div style="height:16px"></div>`;
   root.querySelector("#settings-btn").onclick = settingsSheet;
+  root.querySelector("#pl-all")?.addEventListener("click", () => { showAllLifts = true; renderProgress(root); });
+  root.querySelector("#pl-deload")?.addEventListener("click", () => { if (confirm("Start a deload week today? Same exercises, half the sets, easy effort.")) { deloadNow(); toast("Deload week started"); } });
+  root.querySelector("#pl-block")?.addEventListener("click", () => { if (confirm("Start a new block today? Week 1 begins with 3 reps in the tank.")) { newBlock(); toast("New block started"); } });
+  root.querySelector("#pl-days")?.addEventListener("click", () => numberSheet("Days a week you can train", dir.schedule.daysPerWeek ?? plan?.daysPerWeek ?? 4, 1, 7, (v) => addDirective({ kind: "schedule", daysPerWeek: v, minutes: dir.schedule.minutes ?? undefined }), "Used to spread each muscle's weekly sets over the days you actually train."));
+  root.querySelector("#pl-mins")?.addEventListener("click", () => numberSheet("Minutes per workout", dir.schedule.minutes ?? plan?.budget ?? 75, 20, 150, (v) => addDirective({ kind: "schedule", minutes: v, daysPerWeek: dir.schedule.daysPerWeek ?? undefined }), "Over this, isolation work becomes supersets first, then sets come off muscles that are already ahead.", 5));
+  root.querySelector("#pl-prio")?.addEventListener("click", prioritySheet);
+  root.querySelector("#pl-floor")?.addEventListener("click", () => numberSheet("No sets under this many reps", dir.minReps.all ?? 8, 3, 15, (v) => addDirective({ kind: "rep_floor", minReps: v, scope: "all" }), "Every rep range starts at least here. Sets that would fall under it get a lighter back-off weight."));
+  root.querySelectorAll("[data-rmdir]").forEach((x) => x.addEventListener("click", () => { if (confirm("Remove this rule?")) { removeDirective(x.dataset.rmdir); toast("Removed"); } }));
+  root.querySelectorAll(".mrow").forEach((x) => x.addEventListener("click", () => muscleSheet(x.dataset.muscle, plan)));
+}
+
+const cap = (x) => (x ? x[0].toUpperCase() + x.slice(1) : x);
+
+function numberSheet(title, value, min, max, onSave, sub = "", step = 1) {
+  const el = sheet(`<h2>${esc(title)}</h2>${sub ? `<div class="sub">${esc(sub)}</div>` : ""}
+    <div class="stepper"><span class="lbl">${esc(title)}</span><div class="ctl"><button data-d="-1" aria-label="Less"><i class="ti ti-minus" aria-hidden="true"></i></button><input id="ns-v" inputmode="numeric" value="${value}" /><button data-d="1" aria-label="More"><i class="ti ti-plus" aria-hidden="true"></i></button></div></div>
+    <button class="primary" id="ns-save"><i class="ti ti-check" aria-hidden="true"></i>Save</button>`);
+  const input = el.querySelector("#ns-v");
+  el.querySelectorAll("[data-d]").forEach((b) => b.addEventListener("click", () => { input.value = Math.max(min, Math.min(max, (Number(input.value) || value) + Number(b.dataset.d) * step)); }));
+  el.querySelector("#ns-save").addEventListener("click", () => {
+    const v = Math.round(Number(input.value));
+    if (!(v >= min && v <= max)) return toast(`Pick ${min}–${max}`);
+    closeSheet(); onSave(v); toast("Saved. Today's plan is updated");
+  });
+}
+
+function prioritySheet() {
+  const dir = resolved();
+  const rows = GROWN.map((m) => {
+    const lvl = dir.priorities[m] ?? "grow";
+    const seg = (v, label) => `<button data-m="${esc(m)}" data-l="${v}" aria-pressed="${lvl === v}">${label}</button>`;
+    return `<div class="note-label">${esc(cap(niceMuscleName(m)))}</div><div class="seg">${seg("maintain", "Maintain")}${seg("grow", "Grow")}${seg("specialize", "Priority")}</div>`;
+  }).join("");
+  const el = sheet(`<h2>Muscle priorities</h2><div class="sub">Priority starts a muscle higher and trains it earlier in the workout. Maintain keeps it at the minimum so other muscles can recover and grow.</div>${rows}`);
+  el.querySelectorAll("[data-m]").forEach((b) => b.addEventListener("click", () => {
+    addDirective({ kind: "muscle_priority", muscle: b.dataset.m, level: b.dataset.l });
+    el.querySelectorAll(`[data-m="${b.dataset.m}"]`).forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+    toast("Saved");
+  }));
+}
+
+function muscleSheet(m, plan) {
+  const x = plan?.muscles?.[m];
+  if (!x) return;
+  const hist = (plan.muscles && state.feedback.filter((f) => f.muscle === m).slice(-6).reverse()) || [];
+  const fb = hist.map((f) => `<div class="row"><span>${esc(fmtDate(f.date))}</span><span class="r">${[f.soreness != null ? ["never sore", "healed early", "just healed", "still sore"][f.soreness] : null, f.pump != null ? `pump ${["low", "good", "great"][f.pump]}` : null, f.workload != null ? `workload ${["easy", "about right", "a lot"][f.workload]}` : null].filter(Boolean).join(" · ")}</span></div>`).join("");
+  sheet(`<h2>${esc(cap(niceMuscleName(m)))}</h2><div class="sub">${x.done7} sets in the last 7 days · target about ${x.weeklyTarget} a week</div>
+    <p style="font-size:15px;line-height:1.5">${x.perSession} sets per session (started this block at ${x.start}), trained about ${x.freq}× a week. The minimum to keep growing is ${x.floor} a week; above ${x.max} most people stop recovering.${x.lastChange?.d ? ` Last change: ${x.lastChange.d > 0 ? "+" : ""}${x.lastChange.d} set${Math.abs(x.lastChange.d) === 1 ? "" : "s"} because ${esc(x.lastChange.why)}.` : ""}</p>
+    <div class="label">Your feedback</div><div class="rows">${fb || `<div class="row mut">No taps yet. Rate soreness before, and pump and workload after, and sets will follow.</div>`}</div>`);
 }
 
 export function settingsSheet() {

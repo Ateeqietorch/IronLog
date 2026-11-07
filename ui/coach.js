@@ -2,7 +2,8 @@
 // The coach reads app context, explains, remembers, and proposes changes to
 // today's workout or the program, including exact weights and reps and
 // exercises that aren't in the catalog yet. Nothing changes until Apply.
-import { state, applyProposal, ls, addConstraint, removeConstraint } from "./store.js";
+import { state, applyProposal, ls, addConstraint, removeConstraint, brainSnapshot } from "./store.js";
+import { runAgent, applyProposalCard, undoAction } from "./agent.js";
 import { active, describe } from "../data/constraints.js";
 import { describeChange, validateChange, isDone } from "./session.js";
 import { e1rm } from "../engine/model.js";
@@ -14,8 +15,12 @@ import { md } from "./md.js";
 const KEY = "il3:coach";
 let thread = ls.get(KEY, []);
 let busy = false;
+let busyText = "Thinking…";
+let legacy = ls.get("il4:coachLegacy", false);
+// Undo snapshots live only for this visit (they're big); the cards say so.
+const live = new Map();
 
-const save = () => ls.set(KEY, thread.slice(-40));
+const save = () => ls.set(KEY, thread.slice(-40).map((m) => ({ ...m, actions: m.actions?.map(({ snap, ...a }) => a), proposals: m.proposals?.map(({ snap, ...p }) => p) })));
 
 export function buildContext() {
   const s = state.session;
@@ -73,36 +78,56 @@ export function buildContext() {
     settings: state.settings, bodyweight: state.bodyweight,
     predictionAccuracyReps: state.stats?.maeSettled ?? null,
     catalog,
+    // The engine's own view (levers, muscle volume vs target, block) so even
+    // the older backend's coach explains the real numbers.
+    engine: brainSnapshot(),
     localDate: new Date().toISOString().slice(0, 10),
   };
 }
 
 const PROMPTS = [
-  "I only have 40 minutes today",
-  "Add another biceps exercise today",
-  "Why is the weight lighter today?",
+  "Why are these my numbers today?",
+  "Prioritize my side delts",
+  "No sets under 8 reps",
+  "I only have 45 minutes",
+  "Which muscles am I neglecting?",
   "Something hurts on this exercise",
-  "The machine is taken, what should I do instead?",
 ];
 
+let probed = false;
+let pendingText = "";
+// Open the Coach tab with a question ready to send (from the Train screen).
+export function askAbout(text) {
+  pendingText = text;
+  document.querySelector('.nav button[data-tab="coach"]')?.click();
+}
+
 export function renderCoach(root) {
+  if (!probed) { probed = true; probeBackend().then(() => { if (document.getElementById("composer")) renderCoachInner(root); }); }
+  renderCoachInner(root);
+}
+
+function renderCoachInner(root) {
   const msgs = thread.map((m, i) => {
     if (m.role === "user") return `<div class="msg me">${esc(m.content)}</div>`;
-    const cards = (m.proposals ?? []).map((p, j) => proposalCard(p, i, j)).join("");
-    return `<div class="msg coach">${md(m.content)}</div>${cards}`;
+    const acts = (m.actions ?? []).map((a, j) => actionCard(a, i, j)).join("");
+    const cards = (m.proposals ?? []).map((p, j) => (p.tool ? toolProposalCard(p, i, j) : proposalCard(p, i, j))).join("");
+    return `<div class="msg coach">${md(m.content)}</div>${acts}${cards}`;
   }).join("");
   root.innerHTML = `
     <header class="p-head"><h1>Coach</h1><div style="display:flex;gap:6px"><button class="icon-btn" id="coach-rules" aria-label="Your training rules"><i class="ti ti-list-check" aria-hidden="true"></i></button>${thread.length ? `<button class="icon-btn" id="coach-clear" aria-label="Start a new conversation"><i class="ti ti-refresh" aria-hidden="true"></i></button>` : ""}</div></header>
     <div class="chat" id="chat">
       ${thread.length ? msgs : `<div class="empty" style="margin-top:4px">Ask about today's numbers, tell it what's going on, or ask for a change. It sees your workout, history and strength estimates, and anything it changes, you approve first.</div>`}
-      ${busy ? `<div class="msg coach mut"><i class="ti ti-loader" aria-hidden="true"></i> Thinking…</div>` : ""}
+      ${busy ? `<div class="msg coach mut"><i class="ti ti-loader" aria-hidden="true"></i> ${esc(busyText)}</div>` : ""}
     </div>
+    ${legacy ? `<div class="notice warn" style="margin:8px 12px">The coach is running in basic mode: it can explain the engine but can only change today's workout. Paste the new <b>apps-script/Code.js</b> into Apps Script and redeploy to give it full control of your plan.</div>` : ""}
     ${thread.length ? "" : `<div class="prompts">${PROMPTS.map((p) => `<button class="prompt">${esc(p)}</button>`).join("")}</div>`}
     <form class="composer" id="composer">
       <input id="coach-input" autocomplete="off" placeholder="Ask your coach" aria-label="Message the coach" ${busy ? "disabled" : ""} />
       <button class="send" aria-label="Send" ${busy ? "disabled" : ""}><i class="ti ti-arrow-up" aria-hidden="true"></i></button>
     </form>`;
   root.querySelector("#composer").addEventListener("submit", (ev) => { ev.preventDefault(); send(root, root.querySelector("#coach-input").value); });
+  if (pendingText && !busy) { const inp = root.querySelector("#coach-input"); inp.value = pendingText; pendingText = ""; inp.focus(); }
   root.querySelectorAll(".prompt").forEach((b) => b.addEventListener("click", () => send(root, b.textContent)));
   root.querySelector("#coach-rules")?.addEventListener("click", rulesSheet);
   root.querySelector("#coach-clear")?.addEventListener("click", () => { thread = []; save(); renderCoach(root); });
@@ -121,9 +146,44 @@ export function renderCoach(root) {
     const [i, j] = b.dataset.dismiss.split(":").map(Number);
     thread[i].proposals[j].status = "dismissed"; save(); renderCoach(root);
   }));
+  root.querySelectorAll("[data-tapply]").forEach((b) => b.addEventListener("click", async () => {
+    const [i, j] = b.dataset.tapply.split(":").map(Number);
+    const p = thread[i].proposals[j];
+    const err = await applyProposalCard(p);
+    if (err) { toast(err); return; }
+    live.set(`p${i}:${j}`, p.snap);
+    p.status = "applied"; save(); renderCoach(root); toast("Applied");
+  }));
+  root.querySelectorAll("[data-undo]").forEach((b) => b.addEventListener("click", () => {
+    const key = b.dataset.undo;
+    const [kind, ij] = [key[0], key.slice(1)];
+    const [i, j] = ij.split(":").map(Number);
+    const item = kind === "a" ? thread[i].actions[j] : thread[i].proposals[j];
+    const snap = live.get(key);
+    if (!snap) { toast("Can't undo after leaving the chat. Ask the coach to change it back."); return; }
+    undoAction({ snap });
+    item.undone = true; if (kind === "p") item.status = "undone";
+    live.delete(key); save(); renderCoach(root); toast("Undone");
+  }));
   const chat = root.querySelector("#chat");
   window.scrollTo({ top: document.body.scrollHeight });
   chat?.lastElementChild?.scrollIntoView?.({ block: "end" });
+}
+
+// A change the coach made because you asked: shown with Undo.
+function actionCard(a, i, j) {
+  const key = `a${i}:${j}`;
+  return `<div class="proposal done-card"><div style="display:flex;justify-content:space-between;gap:10px;align-items:center"><span><i class="ti ti-check" aria-hidden="true" style="color:var(--done)"></i> ${esc(a.label)}</span>${a.undone ? `<span class="mut" style="font-size:13px">Undone</span>` : live.has(key) ? `<button class="link" data-undo="${key}" style="margin:0;min-height:32px">Undo</button>` : ""}</div></div>`;
+}
+
+// A change the coach suggests on its own: Apply / Not now.
+function toolProposalCard(p, i, j) {
+  const key = `p${i}:${j}`;
+  const status = p.status === "applied" ? `<div class="mut" style="font-size:13px;margin-top:8px;display:flex;justify-content:space-between"><span><i class="ti ti-check" aria-hidden="true"></i> Applied</span>${live.has(key) ? `<button class="link" data-undo="${key}" style="margin:0;min-height:28px">Undo</button>` : ""}</div>`
+    : p.status === "dismissed" ? `<div class="mut" style="font-size:13px;margin-top:8px">Not applied</div>`
+    : p.status === "undone" ? `<div class="mut" style="font-size:13px;margin-top:8px">Undone</div>`
+    : `<div class="prop-acts"><button class="primary" data-tapply="${i}:${j}" style="height:44px;font-size:19px;margin:0">Apply</button><button class="secondary" data-dismiss="${i}:${j}" style="height:44px">Not now</button></div>`;
+  return `<div class="proposal"><div style="font-weight:500">${esc(p.label)}</div>${status}</div>`;
 }
 
 function proposalCard(p, i, j) {
@@ -163,11 +223,33 @@ async function send(root, text) {
   const t = String(text ?? "").trim();
   if (!t || busy) return;
   thread.push({ role: "user", content: t });
-  busy = true; save(); renderCoach(root);
+  busy = true; busyText = "Thinking…"; save(); renderCoach(root);
+  // Only the recent conversation goes up; old turns just slow it down.
+  const history = thread.slice(-12).map((m) => ({ role: m.role, content: m.content }));
+  while (history.length && history[0].role !== "user") history.shift();
   try {
-    // Only the recent conversation goes up; old turns just slow it down.
-    const messages = thread.slice(-12).map((m) => ({ role: m.role, content: m.content }));
-    while (messages.length && messages[0].role !== "user") messages.shift();
+    if (legacy) throw new Error("unknown action: coach_step");
+    const d = await runAgent(history, { onStatus: (x) => { busyText = `${x}…`; if (document.getElementById("chat")) renderCoach(root); } });
+    const i = thread.length;
+    d.actions.forEach((a, j) => live.set(`a${i}:${j}`, a.snap));
+    thread.push({ role: "assistant", content: d.reply, actions: d.actions.map((a) => ({ label: a.label, snap: a.snap })), proposals: d.proposals });
+  } catch (err) {
+    const m = String(err.message);
+    if (/unknown action: coach_step/.test(m)) {
+      legacy = true; ls.set("il4:coachLegacy", true);
+      await sendLegacy(history);
+    } else {
+      thread.push({ role: "assistant", content: /ANTHROPIC_API_KEY/.test(m) ? "The coach isn't set up yet: add ANTHROPIC_API_KEY under Project Settings → Script Properties in Apps Script."
+        : `Couldn't reach the coach (${m}). Try again in a moment.` });
+    }
+  }
+  busy = false; save();
+  if (document.getElementById("composer")) renderCoach(root);
+}
+
+// The older backend: one call, proposals for today's workout only.
+async function sendLegacy(messages) {
+  try {
     const d = await askCoach({ messages, context: buildContext() });
     for (const r of d.rulesAdded ?? []) addConstraint(r);
     for (const id of d.rulesRemoved ?? []) removeConstraint(id);
@@ -189,8 +271,13 @@ async function send(root, text) {
       : /ANTHROPIC_API_KEY/.test(m) ? "The coach isn't set up yet: add ANTHROPIC_API_KEY under Project Settings → Script Properties in Apps Script."
       : `Couldn't reach the coach (${m}). Try again in a moment.` });
   }
-  busy = false; save();
-  if (document.getElementById("composer")) renderCoach(root);
+}
+
+// Check whether the backend has been updated (cheap ping of coach_step with
+// nothing to do); clears basic mode after a redeploy.
+export async function probeBackend() {
+  try { await post("coach_step", { probe: true }); legacy = false; ls.set("il4:coachLegacy", false); }
+  catch (e) { if (/unknown action/.test(String(e.message))) { legacy = true; ls.set("il4:coachLegacy", true); } }
 }
 
 // The standing rules the generator enforces. Viewable and removable here;

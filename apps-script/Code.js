@@ -460,6 +460,8 @@ const V3_TABLES = {
   Review:         ["Name", "UpdatedAt", "JSON"],
   CoachMemory:    ["Id", "UpdatedAt", "JSON"],
   Constraints:    ["Id", "UpdatedAt", "JSON"],
+  Feedback:       ["Id", "UpdatedAt", "JSON"],
+  Directives:     ["Id", "UpdatedAt", "JSON"],
 };
 
 // ── Coach (conversational agent) ───────────────────────────────────────────
@@ -649,6 +651,26 @@ function runCoach(ss, body) {
   return { reply, proposals, remembered, rulesAdded, rulesRemoved, model };
 }
 
+// Limits keep the relay from being a general-purpose proxy for the key.
+const STEP_LIMITS = { system: 80000, messages: 60, tools: 24, maxTokens: 2500, messageChars: 200000 };
+
+function coachStep(body) {
+  const system = body.system;
+  const sysLen = JSON.stringify(system || "").length;
+  if (!system || sysLen > STEP_LIMITS.system) throw new Error("system prompt missing or too long");
+  if (String(JSON.stringify(system)).indexOf("IronLog") < 0) throw new Error("not an IronLog coach request");
+  const messages = Array.isArray(body.messages) ? body.messages.slice(-STEP_LIMITS.messages) : [];
+  if (!messages.length || messages[0].role !== "user") throw new Error("messages must start with the lifter");
+  if (JSON.stringify(messages).length > STEP_LIMITS.messageChars) throw new Error("conversation too long");
+  const tools = Array.isArray(body.tools) ? body.tools.slice(0, STEP_LIMITS.tools) : [];
+  const max = Math.min(STEP_LIMITS.maxTokens, Math.max(256, Number(body.max_tokens) || 1500));
+  let model = COACH_MODEL;
+  let res = callClaudeRaw({ model, max_tokens: max, system, tools, messages });
+  if (res.code === 404 && model !== CLAUDE_MODEL) { model = CLAUDE_MODEL; res = callClaudeRaw({ model, max_tokens: max, system, tools, messages }); }
+  if (res.code !== 200) throw new Error("Claude API error " + res.code + ": " + (res.body.error ? res.body.error.message : "unknown"));
+  return { content: res.body.content || [], stop_reason: res.body.stop_reason, usage: res.body.usage || null, model };
+}
+
 function doPost(e) {
   try {
     let body = {};
@@ -665,6 +687,16 @@ function doPost(e) {
       // Phones drop long requests (iOS gives up after about a minute), so the
       // answer is also parked for the app to collect with coach_result.
       if (body.requestId) { try { CacheService.getScriptCache().put("coach:" + body.requestId, JSON.stringify(out), 3600); } catch (err) {} }
+      return respond(out);
+    }
+
+    // One model call for the in-app coach agent. The app runs the tool loop
+    // itself (its tools act on the same engine that sets every number), so
+    // the backend only holds the API key and relays a single step.
+    if (action === "coach_step") {
+      if (body.probe) return respond({ ok: true, probe: true });
+      const out = Object.assign({ ok: true }, coachStep(body));
+      if (body.requestId) { try { CacheService.getScriptCache().put("coach:step:" + body.requestId, JSON.stringify(out), 3600); } catch (err) {} }
       return respond(out);
     }
 

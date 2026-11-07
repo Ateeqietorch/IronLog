@@ -223,3 +223,27 @@ body:not([data-tab="train"]) .app.resting { padding-bottom: calc(68px + env(safe
 .h-note { font-size: 13px; color: var(--silver-2); }
 .h-note .ti { color: var(--warn); }
 .chip.effort { font-size: 14px; padding: 0 6px; }
+
+/* coach brain: levers, feedback, supersets, plan tab */
+.pill.lever { border-color: var(--seam); color: var(--silver-2); background: var(--plate-deep); }
+.pill.lever.up { border-color: #2f4a33; color: var(--done); background: #16221a; }
+.pill.lever.down { border-color: #4d3c1d; color: var(--warn); background: #241d10; }
+.lever-mini { font-size: 11px; color: var(--steel); border: 1px solid var(--seam); border-radius: 5px; padding: 1px 5px; margin-left: 4px; white-space: nowrap; }
+.lever-mini.up { color: var(--done); border-color: #2f4a33; } .lever-mini.down { color: var(--warn); border-color: #4d3c1d; }
+.superset-tag { color: var(--silver-2); margin-top: 2px; display: flex; align-items: center; gap: 4px; }
+.superset-tag .ti { color: var(--red-ink); }
+.technique { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; line-height: 1.35; color: var(--silver); background: var(--red-wash); border: 1px solid var(--red-dim); border-radius: var(--r-control); padding: 7px 10px; margin-top: 6px; }
+.technique .ti { color: var(--red-ink); font-size: 16px; margin-top: 1px; }
+.fb-box { margin: 10px 0 2px; padding: 10px; border-radius: var(--r-control); background: var(--plate-deep); border: 1px solid var(--seam); }
+.chips.fb .chip { height: 36px; font-size: 13px; padding: 0 4px; }
+.plan-card { margin-top: 6px; }
+.vbar { position: relative; height: 6px; border-radius: 3px; background: var(--seam); margin-top: 6px; width: 180px; max-width: 46vw; }
+.vbar i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px; background: var(--silver-2); }
+.vbar i.behind { background: var(--warn); } .vbar i.ok { background: var(--done); } .vbar i.high { background: var(--red); }
+.vbar b { position: absolute; top: -3px; width: 2px; height: 12px; background: var(--steel); }
+.vbar b.tgt { background: var(--red); }
+.mrow { width: 100%; text-align: left; align-items: center; }
+.check-line { margin: 0 10px 8px; width: calc(100% - 20px); align-items: center; }
+.check-line span { -webkit-line-clamp: 2; }
+.check-line .ti-chevron-right { margin-left: auto; color: var(--steel); }
+.chips.fb .chip { height: auto; min-height: 36px; padding: 4px; line-height: 1.15; font-size: 12.5px; }

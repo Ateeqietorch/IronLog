@@ -2,19 +2,23 @@
 // from here; nothing here touches the DOM.
 import { indexCatalog, mergeCatalogs, validateExercise, exerciseFromSpec } from "../engine/catalog.js";
 import { CURATED } from "../engine/seed/curated.js";
-import { replayHistory } from "../engine/replay.js";
+import { replayHistory, normalizeRows } from "../engine/replay.js";
+import { planDay, coachSnapshot } from "../engine/brain.js";
+import { blockFor } from "../engine/block.js";
+import { resolveDirectives, cleanDirective, mergeDirectives, activeDirectives } from "../engine/directives.js";
 import { mesoWeek } from "../engine/meso.js";
 import { tables } from "../data/sheets.js";
 import { readLog, readBodyweight, writeSession, dedupeLog, rowToObject, objectToRow } from "../data/log.js";
 import { loadProgram, replaceSlot, updateSlot, insertSlot, saveProgramStorage, readProgramStorage } from "../data/program.js";
 import { newTrial, applyTrials, recordSession, resolveTrial } from "../data/trials.js";
-import { buildSession, toRows, applyChanges } from "./session.js";
+import { buildSession, toRows, applyChanges, planOne } from "./session.js";
+import { planExercise as brainPlanExercise } from "../engine/brain.js";
 import { validateDay } from "../engine/validate.js";
 import { muscleState, recovered, chooseNextDay } from "../engine/recovery.js";
 import { assessSession } from "../engine/assess.js";
 import { withDefaults, mergeConstraints, active, cleanConstraint } from "../data/constraints.js";
 
-const K = { session: "il3:session", log: "il3:logCache", meso: "il3:meso", settings: "il3:settings", pending: "il3:pending", bw: "il3:bodyweight", trials: "il3:trials", own: "il3:ownExercises", constraints: "il3:constraints" };
+const K = { session: "il3:session", log: "il3:logCache", meso: "il3:meso", settings: "il3:settings", pending: "il3:pending", bw: "il3:bodyweight", trials: "il3:trials", own: "il3:ownExercises", constraints: "il3:constraints", feedback: "il4:feedback", directives: "il4:directives" };
 
 export const ls = {
   get(k, fallback = null) { try { const v = localStorage.getItem(k); return v == null ? fallback : JSON.parse(v); } catch { return fallback; } },
@@ -31,6 +35,9 @@ export const state = {
   index: null, rows: [], models: {}, stats: null, program: null, bodyweight: null,
   session: null, settings: { policy: "balanced", haptics: true }, meso: null,
   trials: [], constraints: [], sync: "idle", offline: false, listeners: new Set(),
+  // Coach brain inputs (engine/brain.js): normalized sets, per-muscle
+  // feedback, and standing directives from you or the coach.
+  normSets: [], feedback: [], directives: [], plan: null,
 };
 
 export function emit() { for (const f of state.listeners) f(state); }
@@ -40,12 +47,28 @@ function rebuildModels() {
   const r = replayHistory(state.rows, state.index);
   state.models = r.models;
   state.stats = r.stats;
+  state.normSets = normalizeRows(state.rows, state.index).sets;
 }
+
+// ── Directives and feedback (the coach brain's inputs) ─────────────────────
+export const directives = () => resolveDirectives(state.directives, { defaults: { minutes: state.settings.minutes ?? null, progression: state.settings.policy ?? "balanced" } });
+export const brainCtx = () => {
+  const dir = directives();
+  let block = state.session?.block ?? state.plan?.block ?? null;
+  if (!block) {
+    const dates = [...new Set(state.normSets.map((x) => x.date))].filter((d) => d < today());
+    block = blockFor(dates, today(), { weeks: dir.blockWeeks, deloadFrom: dir.deloadFrom, newBlockFrom: dir.newBlockFrom });
+  }
+  return { sets: state.normSets, block, directives: dir };
+};
+const joints = () => state.feedback.filter((f) => f.exerciseId && f.joints != null);
 
 export async function boot({ fixture = null } = {}) {
   state.settings = { ...state.settings, ...ls.get(K.settings, {}) };
   state.meso = ls.get(K.meso, null);
   state.trials = ls.get(K.trials, []);
+  state.feedback = ls.get(K.feedback, []);
+  state.directives = ls.get(K.directives, []);
   state.constraints = withDefaults(ls.get(K.constraints, []));
   let own = ls.get(K.own, []);
   if (!fixture) {
@@ -59,6 +82,23 @@ export async function boot({ fixture = null } = {}) {
       const mine = new Set(state.trials.map((t) => t.id));
       const extra = recs.map((r) => r.value).filter((t) => t?.id && !mine.has(t.id));
       if (extra.length) { state.trials = [...state.trials, ...extra]; ls.set(K.trials, state.trials); emit(); }
+    }).catch(() => {});
+    // Feedback and directives live on the phone first and back up to the
+    // sheet (older backends don't have these tables; that's fine).
+    tables.list("Directives").then((recs) => {
+      const remote = recs.map((r) => r.value).filter((d) => d?.id);
+      const merged = mergeDirectives(remote, state.directives);
+      const missing = state.directives.filter((d) => !remote.some((r) => r.id === d.id));
+      if (missing.length) tables.upsert("Directives", missing.map((d) => ({ key: d.id, value: d }))).catch(() => {});
+      if (JSON.stringify(merged) !== JSON.stringify(state.directives)) { state.directives = merged; ls.set(K.directives, merged); refreshToday(); emit(); }
+    }).catch(() => {});
+    tables.list("Feedback").then((recs) => {
+      const remote = recs.map((r) => r.value).filter((f) => f?.id);
+      const mine = new Set(state.feedback.map((f) => f.id));
+      const extra = remote.filter((f) => !mine.has(f.id));
+      const missing = state.feedback.filter((f) => !remote.some((r) => r.id === f.id));
+      if (missing.length) tables.upsert("Feedback", missing.map((f) => ({ key: f.id, value: f }))).catch(() => {});
+      if (extra.length) { state.feedback = [...state.feedback, ...extra]; ls.set(K.feedback, state.feedback); refreshToday(); emit(); }
     }).catch(() => {});
     tables.list("Constraints").then((recs) => {
       const remote = recs.map((r) => r.value).filter(Boolean);
@@ -96,8 +136,11 @@ export async function boot({ fixture = null } = {}) {
 
   const draft = ls.get(K.session, null);
   const draftHasSets = draft?.exercises?.some((e) => e.logged?.length);
-  if (draft && !draft.saved && draftHasSets && draft.date >= shiftDate(today(), -1)) state.session = draft;
-  else {
+  if (draft && !draft.saved && draftHasSets && draft.date >= shiftDate(today(), -1)) {
+    state.session = draft;
+    // The coach and Plan tab read the brain's view of this day.
+    try { state.plan = planFor(draft.dayKey, draft.date).plan; } catch { state.plan = null; }
+  } else {
     const pick = suggestNext(today());
     startDay(pick.day.key, { persist: false, selection: pick.reason });
   }
@@ -120,9 +163,9 @@ export function suggestNext(date = today()) {
   return chooseNextDay(state.program, state.rows, state.index, date, { prepare }) ?? { day: state.program.days[0], reason: "" };
 }
 
-export function startDay(dayKey, { persist = true, selection = null } = {}) {
+// The brain's plan for a program day (after trials and the validator).
+export function planFor(dayKey, date = today()) {
   const base = state.program.days.find((d) => d.key === dayKey) ?? state.program.days[0];
-  const date = today();
   // Every session passes the validator before you see it: avoid list,
   // spine load, redundant exercises, pattern caps, per-muscle volume.
   const st = muscleState(state.rows, state.index, date);
@@ -130,13 +173,139 @@ export function startDay(dayKey, { persist = true, selection = null } = {}) {
     index: state.index, constraints: active(state.constraints), recovery: st,
     recoveredFn: (m) => recovered(st, m, date), date,
   });
-  state.session = buildSession({
-    day: checked.day, index: state.index, models: state.models, date, weekInfo: weekInfo(date),
-    bodyweight: state.bodyweight, policy: state.settings.policy,
+  const plan = planDay({
+    day: checked.day, program: state.program, date, sets: state.normSets, index: state.index, models: state.models,
+    feedback: state.feedback, directives: directives(), bodyweight: state.bodyweight, joints: joints(),
   });
-  state.session.adjustments = checked.notes;
-  state.session.selection = selection;
+  return { checked, plan };
+}
+
+export function startDay(dayKey, { persist = true, selection = null, todayChanges = [] } = {}) {
+  try { startBrainDay(dayKey, { persist, selection, todayChanges }); }
+  catch (err) {
+    // Never leave you without a workout: if the planner fails on something
+    // unexpected, fall back to the previous engine for today.
+    console.error("planner failed, using the previous engine", err);
+    const base = state.program.days.find((d) => d.key === dayKey) ?? state.program.days[0];
+    const date = today();
+    const st = muscleState(state.rows, state.index, date);
+    const checked = validateDay(applyTrials(base, state.trials, state.index), { index: state.index, constraints: active(state.constraints), recovery: st, recoveredFn: (m) => recovered(st, m, date), date });
+    state.plan = null;
+    state.session = buildSession({ day: checked.day, index: state.index, models: state.models, date, weekInfo: weekInfo(date), bodyweight: state.bodyweight, policy: state.settings.policy });
+    state.session.adjustments = checked.notes;
+    state.session.selection = selection;
+    if (persist) saveDraft(); else ls.del(K.session);
+  }
+}
+
+function startBrainDay(dayKey, { persist = true, selection = null, todayChanges = [] } = {}) {
+  const date = today();
+  const { checked, plan } = planFor(dayKey, date);
+  state.plan = plan;
+  let s = buildSession({
+    day: checked.day, index: state.index, models: state.models, date,
+    bodyweight: state.bodyweight, policy: directives().progression ?? state.settings.policy, brain: plan, ctx: { ...brainCtx(), block: plan.block },
+  });
+  s.adjustments = [...checked.notes, ...plan.notes];
+  s.selection = selection;
+  s.deloadSignal = plan.deloadSignal;
+  // Re-apply today-only changes (a switch, an added exercise) made before
+  // the workout started, so rebuilding the plan never loses them.
+  if (todayChanges.length) {
+    const fixed = todayChanges.map((c) => ({ ...c, exerciseIndex: c.fromId ? s.exercises.findIndex((e) => e.ex?.id === c.fromId) : c.exerciseIndex }))
+      .filter((c) => c.type === "add_exercise" || c.type === "change_day" || c.exerciseIndex >= 0);
+    s = applyChanges(s, fixed, { index: state.index, models: state.models, ctx: { ...brainCtx(), block: plan.block } });
+    s.todayChanges = todayChanges;
+  }
+  state.session = s;
   if (persist) saveDraft(); else ls.del(K.session);
+}
+
+// Rebuild today's workout after a directive or feedback change. Before the
+// first set: the whole plan is rebuilt (today's switches re-applied). After
+// that: only exercises you haven't started are re-planned, in place.
+export function refreshToday() {
+  const s = state.session;
+  if (!s || s.saved || !state.index) return;
+  if (s.engine !== "brain" && anyLoggedIn(s)) return; // a workout started on the previous engine finishes on it
+  if (!anyLoggedIn(s)) { startDay(s.dayKey, { persist: !!s.startedAt, selection: s.selection, todayChanges: s.todayChanges ?? [] }); return; }
+  const ctx = brainCtx();
+  const next = structuredClone(s);
+  next.exercises = next.exercises.map((e) => {
+    if (e.logged.length || !e.ex || e.coachSet) return e;
+    const sore = Object.entries(e.ex.contributions).some(([m, c]) => c >= 1 && soreToday(m, s.date));
+    const p = planOneFresh(e, ctx, { extraRir: sore ? 1 : 0 });
+    return p ?? e;
+  });
+  state.session = next;
+  saveDraft();
+}
+
+function soreToday(muscle, date) {
+  return state.feedback.some((f) => f.date === date && f.muscle === muscle && f.soreness === 3);
+}
+
+function planOneFresh(e, ctx, { extraRir = 0 } = {}) {
+  try {
+    const it = brainPlanExercise({ ex: e.ex, slot: e.slot, nSets: e.slot.sets, date: state.session.date, sets: ctx.sets, models: state.models, block: ctx.block ?? state.session.block, directives: ctx.directives, bodyweight: state.bodyweight, extraRir });
+    const p = planOne({ slot: e.slot, ex: e.ex, models: state.models, date: state.session.date, weekInfo: state.session.weekInfo, bodyweight: state.bodyweight, ctx: { ...ctx, block: ctx.block ?? state.session.block }, decided: it });
+    return { ...e, ...p, slot: { ...e.slot, sets: p.sets } };
+  } catch { return null; }
+}
+
+export function setDirectives(list, { replan = true } = {}) {
+  state.directives = list;
+  ls.set(K.directives, list);
+  tables.upsert("Directives", list.map((d) => ({ key: d.id, value: d }))).catch(() => {});
+  if (replan) { if (state.session?.saved) refreshPreview(); else refreshToday(); }
+  emit();
+}
+
+let dirSeq = 0;
+// Add a directive (from the Plan tab or the coach). Returns the stored one,
+// or null if it's not valid.
+export function addDirective(raw, { source = "user" } = {}) {
+  const d = cleanDirective({ ...raw, source: raw.source ?? source, at: raw.at ?? today() }, { idFn: () => `d${Date.now().toString(36)}${(dirSeq++).toString(36)}` });
+  if (!d) return null;
+  setDirectives([...state.directives, d]);
+  return d;
+}
+export function removeDirective(id) {
+  setDirectives(state.directives.map((d) => (d.id === id ? { ...d, removed: true } : d)));
+}
+export const liveDirectives = () => activeDirectives(state.directives);
+
+let fbSeq = 0;
+// Per-muscle feedback (soreness before, pump/workload after) and per-
+// exercise joint feedback. One record per date+muscle / date+exercise;
+// later taps update it.
+export function addFeedback(rec) {
+  const date = rec.date ?? today();
+  const key = (f) => `${f.date}|${f.muscle ?? ""}|${f.exerciseId ?? ""}`;
+  const existing = state.feedback.find((f) => key(f) === key({ ...rec, date }));
+  const next = existing ? { ...existing, ...rec, date } : { id: `f${Date.now().toString(36)}${(fbSeq++).toString(36)}`, ...rec, date };
+  state.feedback = [...state.feedback.filter((f) => f !== existing), next].slice(-600);
+  ls.set(K.feedback, state.feedback);
+  tables.upsert("Feedback", [{ key: next.id, value: next }]).catch(() => {});
+  if (rec.soreness != null) refreshToday();
+  else if (state.session?.saved) refreshPreview();
+  emit();
+  return next;
+}
+
+// After a workout is saved, the brain's view moves to the next session.
+export function refreshPreview() {
+  try {
+    const tmr = shiftDate(today(), 1);
+    state.plan = planFor(suggestNext(tmr).day.key, tmr).plan;
+  } catch { /* keep the last plan */ }
+}
+export const feedbackFor = (date, { muscle = null, exerciseId = null } = {}) => state.feedback.find((f) => f.date === date && (muscle ? f.muscle === muscle : true) && (exerciseId ? f.exerciseId === exerciseId : !f.exerciseId));
+
+// What the coach sees of the brain: today's plan and the muscle table.
+export function brainSnapshot() {
+  if (!state.plan) return null;
+  return coachSnapshot(state.plan, { index: state.index });
 }
 
 // ── Standing rules ─────────────────────────────────────────────────────────
@@ -188,7 +357,10 @@ export function setSettings(patch) {
 export function newBlock() {
   state.meso = { start: today() };
   ls.set(K.meso, state.meso);
-  emit();
+  addDirective({ kind: "new_block", from: today() });
+}
+export function deloadNow() {
+  addDirective({ kind: "deload", from: today() });
 }
 
 // Save the session to the sheet. If that fails, keep it as pending and retry
@@ -234,6 +406,7 @@ export async function finishSession({ fixture = false } = {}) {
   try { assessment = assessSession({ session: s, rows: state.rows, index: state.index, date: s.date }); } catch { /* never block a save */ }
   if (assessment) ls.set("il3:lastAssessment", { date: s.date, day: s.dayLabel, verdict: assessment.verdict, headline: assessment.headline, lines: assessment.lines });
   state.session = { ...s, saved: true, assessment };
+  refreshPreview();
   ls.del(K.session);
   state.sync = "saving"; emit();
   if (fixture) { dropPending(s.sessionKey, rows); state.sync = "saved"; onFinish.forEach((f) => f(s)); emit(); return { ok: true, pending: false }; }
@@ -329,7 +502,12 @@ export function applyProposal(changes) {
     }
     today.push(c);
   }
-  if (today.length) setSession(applyChanges(state.session, today, { index: state.index, models: state.models }), { undoable: true });
+  if (today.length) {
+    const before = state.session;
+    const next = applyChanges(before, today, { index: state.index, models: state.models, ctx: brainCtx() });
+    if (!anyLoggedIn(before)) next.todayChanges = [...(before.todayChanges ?? []), ...today.filter((c) => !c.scope || c.scope === "today").map((c) => ({ ...c, fromId: before.exercises[c.exerciseIndex]?.ex?.id ?? null }))];
+    setSession(next, { undoable: true });
+  }
   return problems;
 }
 
@@ -405,7 +583,10 @@ function recordSwitch(exIdx, to, mode, { sessions = 3 } = {}) {
 export function switchExercise(exIdx, to, mode, { sessions = 3 } = {}) {
   addExercise(to);
   const change = { type: "switch_exercise", exerciseIndex: exIdx, toExerciseId: to.id, ...recordSwitch(exIdx, to, mode, { sessions }) };
-  setSession(applyChanges(state.session, [change], { index: state.index, models: state.models }), { undoable: mode === "today" });
+  const before = state.session;
+  const next = applyChanges(before, [change], { index: state.index, models: state.models, ctx: brainCtx() });
+  if (mode === "today" && !anyLoggedIn(before)) next.todayChanges = [...(before.todayChanges ?? []), { ...change, fromId: before.exercises[exIdx]?.ex?.id ?? null }];
+  setSession(next, { undoable: mode === "today" });
 }
 
 // Trial review: keep it (becomes permanent), go back, or give it 2 more.
@@ -424,3 +605,30 @@ export function reviewTrial(id, decision) {
 }
 
 const anyLoggedIn = (s) => s.exercises.some((e) => e.logged.length);
+
+// ── Undo for coach actions ─────────────────────────────────────────────────
+// Everything a coach change can touch, captured before it applies.
+export function snapshotState() {
+  return {
+    directives: structuredClone(state.directives), constraints: structuredClone(state.constraints),
+    trials: structuredClone(state.trials), session: structuredClone(state.session),
+    program: structuredClone(readProgramStorage()), feedback: structuredClone(state.feedback), own: ls.get(K.own, []),
+  };
+}
+export function restoreState(snap) {
+  if (!snap) return;
+  if (snap.program?.exercises) { saveProgramStorage(snap.program); state.program = loadProgram(state.index); }
+  setTrials(snap.trials);
+  state.constraints = snap.constraints; ls.set(K.constraints, snap.constraints);
+  tables.upsert("Constraints", snap.constraints.map((c) => ({ key: c.id, value: c }))).catch(() => {});
+  state.feedback = snap.feedback; ls.set(K.feedback, snap.feedback);
+  // Directives keep tombstones so a removal syncs: anything added since the
+  // snapshot is marked removed rather than dropped.
+  const before = new Set(snap.directives.map((d) => d.id));
+  const added = state.directives.filter((d) => !before.has(d.id)).map((d) => ({ ...d, removed: true }));
+  setDirectives([...snap.directives, ...added], { replan: false });
+  state.session = snap.session;
+  saveDraft();
+  if (state.session && !state.session.saved && !anyLoggedIn(state.session)) refreshToday();
+  emit();
+}

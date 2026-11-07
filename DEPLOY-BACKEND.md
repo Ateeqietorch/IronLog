@@ -1,5 +1,10 @@
 # Updating the Apps Script backend
 
+> **November 2026 (coach brain):** paste the new `apps-script/Code.js` and
+> redeploy once (Manual deploy below). It adds `coach_step` (the coach that
+> can read and change your plan) and the `Feedback` / `Directives` tabs.
+> Until then the app works and the coach runs in basic mode.
+
 The frontend deploys itself from `main` via GitHub Pages. The backend
 (`apps-script/Code.js`) deploys automatically too once you've done the
 one-time setup below; until then, use the manual steps.

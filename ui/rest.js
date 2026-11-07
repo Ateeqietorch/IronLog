@@ -87,8 +87,8 @@ export function runIosTimer(seconds) {
 }
 
 // ── The dock ─────────────────────────────────────────────────────────────
-export function startRest(ex, { next = "" } = {}) {
-  const secs = restSecondsFor(ex);
+export function startRest(ex, { next = "", seconds = null } = {}) {
+  const secs = seconds ?? restSecondsFor(ex);
   endsAt = Date.now() + secs * 1000;
   extra = 0; nextText = next; alerted = false;
   show();

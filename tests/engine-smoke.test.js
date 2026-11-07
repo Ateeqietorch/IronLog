@@ -4,7 +4,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import * as engine from "../engine/index.js";
 
 test("engine loads in Node as an ES module", () => {
-  assert.match(engine.ENGINE_VERSION, /^3\./);
+  assert.match(engine.ENGINE_VERSION, /^4\./);
 });
 
 test("engine files stay pure (no DOM, network, storage, or clock)", () => {

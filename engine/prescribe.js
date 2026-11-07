@@ -247,9 +247,13 @@ export function recalcRemaining({ plan, model, models, exercise, loggedSets, loc
   }
   const sets = plan.sets.map((s) => {
     if (done.has(s.index) || lock.has(s.index)) return s;
-    const reps = Math.max(1, repsAt(E, eff, m.k, m.fatigueDecay, s.index, r));
-    const changed = reps !== s.reps || load !== s.load;
-    return { ...s, load, reps, ...(changed ? { adjusted: true } : {}) };
+    // A planned back-off set keeps its lighter weight (it exists so late
+    // sets stay in the rep range); only its reps follow today's strength.
+    const keep = s.backoff && !reloaded && s.load < load;
+    const L = keep ? s.load : load;
+    const reps = Math.max(1, repsAt(E, keep ? toEffective(exercise, s.load, bodyweight) : eff, m.k, m.fatigueDecay, s.index, r));
+    const changed = reps !== s.reps || L !== s.load;
+    return { ...s, load: L, reps, ...(changed ? { adjusted: true } : {}) };
   });
   const anyChanged = sets.some((s, i) => s !== plan.sets[i] && s.adjusted);
   const unit = exercise.loadType === "dumbbell-pair" ? " lb each hand" : " lb";

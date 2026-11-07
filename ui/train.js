@@ -1,8 +1,12 @@
 // Train screen (DESIGN-SPEC.md §5.1–5.5).
-import { state, setSession, startDay, finishSession, hasPending, undo, isSaving, reviewTrial, suggestNext, today } from "./store.js";
+import { state, setSession, startDay, finishSession, hasPending, undo, isSaving, reviewTrial, suggestNext, today, addFeedback, feedbackFor, deloadNow } from "./store.js";
+import { blockLine } from "../engine/block.js";
+import { niceMuscleName } from "../engine/directives.js";
+import { GROWN } from "../engine/volume.js";
 import { switchSheet } from "./switch.js";
+import { askAbout } from "./coach.js";
 import { inReview, trialSummary } from "../data/trials.js";
-import { logSet, target, isDone, sessionDone, anyLogged, stepLoad, stopExercise, resumeExercise, setExerciseNote, pastSessionsFor } from "./session.js";
+import { logSet, target, isDone, sessionDone, anyLogged, stepLoad, stopExercise, resumeExercise, setExerciseNote, pastSessionsFor, partnerOf } from "./session.js";
 import { resolveExercise } from "../engine/catalog.js";
 import { statusLine } from "../engine/meso.js";
 import { esc, sheet, closeSheet, toast, buzz, fmtDate } from "./dom.js";
@@ -54,8 +58,44 @@ function statusText(s) {
   const extra = e?.plan?.reason?.extraRir;
   if (extra) return `First session back · ${extra === 1 ? "one extra rep" : "two extra reps"} in the tank`;
   const rir = e?.plan?.reason?.baseRir ?? (s.weekInfo.deload ? 4 : 2);
-  return statusLine(s.weekInfo, rir);
+  const base = s.block ? blockLine(s.block, rir) : statusLine(s.weekInfo, rir);
+  return s.minutes ? `${base} · ~${s.minutes} min` : base;
 }
+
+// ── Feedback taps (feed the volume model; COACH-BRAIN.md §3.3) ─────────────
+const SORENESS = [[0, "Not sore"], [1, "Healed early"], [2, "Just healed"], [3, "Still sore"]];
+const PUMP = [[0, "Low"], [1, "Good"], [2, "Great"]];
+const WORKLOAD = [[0, "Easy"], [1, "About right"], [2, "A lot"]];
+const JOINTS = [[0, "Fine"], [1, "Achy"], [2, "Painful"]];
+const prime = (ex) => Object.entries(ex?.contributions ?? {}).filter(([m, c]) => c >= 1 && GROWN.includes(m)).map(([m]) => m);
+const fbChips = (kind, opts, value, extra = "") => `<div class="chips fb" role="group">${opts.map(([v, label]) => `<button class="chip" data-fb="${kind}" data-v="${v}" ${extra} aria-pressed="${value === v}">${esc(label)}</button>`).join("")}</div>`;
+
+// Before the first set: how did this muscle recover from last time?
+function sorenessAsk(s, e) {
+  if (e.logged.length || !e.ex) return "";
+  const trainedBefore = (m) => state.normSets.some((x) => x.date < s.date && (state.index.byId.get(x.id)?.contributions?.[m] ?? 0) >= 1);
+  const m = prime(e.ex).find((x) => trainedBefore(x) && feedbackFor(s.date, { muscle: x })?.soreness == null);
+  if (!m) return "";
+  return `<div class="fb-box" data-muscle="${esc(m)}"><div class="label" style="margin:0 0 6px">${esc(cap(niceMuscleName(m)))} since last time? <span class="mut">(sets today adjust)</span></div>${fbChips("soreness", SORENESS, null)}</div>`;
+}
+
+// After the last set of a muscle today: pump and workload; and joints for
+// this exercise.
+function afterAsk(s, e, i, { inSheet = false } = {}) {
+  if (!e.ex || !e.logged.length) return "";
+  const parts = [];
+  const j = feedbackFor(s.date, { exerciseId: e.ex.id })?.joints;
+  parts.push(`<div class="label" style="margin:0 0 6px">Joints on ${esc(e.ex.name)}</div>${fbChips("joints", JOINTS, j ?? null, `data-ex="${esc(e.ex.id)}"`)}`);
+  const lastFor = (m) => !s.exercises.some((x, k) => k !== i && !isDone(x) && (x.ex?.contributions?.[m] ?? 0) >= 1);
+  for (const m of prime(e.ex).filter(lastFor)) {
+    const f = feedbackFor(s.date, { muscle: m }) ?? {};
+    parts.push(`<div class="label" style="margin:10px 0 6px">${esc(cap(niceMuscleName(m)))}: pump</div>${fbChips("pump", PUMP, f.pump ?? null, `data-muscle="${esc(m)}"`)}
+      <div class="label" style="margin:10px 0 6px">${esc(cap(niceMuscleName(m)))}: workload</div>${fbChips("workload", WORKLOAD, f.workload ?? null, `data-muscle="${esc(m)}"`)}`);
+  }
+  return `<div class="fb-box"${inSheet ? ' style="border:0;padding:0;background:none"' : ""}>${parts.join("")}${inSheet ? "" : `<div class="mut" style="font-size:12px;margin-top:8px">Optional. This is how the coach decides next time's sets.</div>`}</div>`;
+}
+const cap = (x) => (x ? x[0].toUpperCase() + x.slice(1) : x);
+const LEVER_CLASS = { "add-reps": "up", "add-load": "up", coarse: "up", intensify: "up", hold: "", "back-off": "down", recalibrate: "", deload: "", calibrate: "" };
 
 export function renderTrain(root) {
   const s = state.session;
@@ -76,6 +116,7 @@ export function renderTrain(root) {
     <div class="strip" aria-hidden="true">${strip}</div>
     ${state.offline ? `<div class="notice warn">Couldn't reach your sheet. Today's sets are saved on this phone and will sync.</div>` : ""}
     ${reviewCards()}
+    ${deloadCard(s)}
     ${checkCard(s)}
     ${e ? nowCard(s, e) : ""}
     ${upNext(s)}
@@ -88,13 +129,15 @@ function nowCard(s, e) {
   const done = isDone(e);
   const t = target(e);
   const si = Math.min(e.logged.length, e.sets - 1);
-  const key = `${s.sessionKey}|${e.i}|${e.logged.length}`;
+  const key = `${s.sessionKey}|${e.i}|${e.logged.length}|${t.rir}`;
   if (chosenFor !== key) { chosenFor = key; chosenRir = t.rir ?? 2; }
   const plannedRir = t.rir ?? 2;
   const r = e.plan?.reason;
   const icon = r?.changePct > 0.5 ? "ti-trending-up up" : r?.changePct < -0.5 ? "ti-trending-down down" : "ti-info-circle";
   const reasonText = e.plan?.text ?? e.note ?? "";
   const manualFirst = !e.plan && e.logged.length === 0;
+  const partner = partnerOf(s, s.cur);
+  const technique = e.plan?.technique && !done ? `<div class="technique"><i class="ti ti-bolt" aria-hidden="true"></i>${e.plan.technique === "myo-reps" ? "After the last set: myo-reps. Rest 15 s, do 3–5 reps, repeat 3 times." : "After the last set: long-length partials. Keep going with half reps in the stretched half until you can't."}</div>` : "";
 
   const rows = Array.from({ length: e.sets }, (_, i) => {
     const l = e.logged.find((x) => x.index === i);
@@ -113,8 +156,9 @@ function nowCard(s, e) {
   <section class="card" aria-label="Current exercise">
     <div class="card-top">
       <div>
-        <div class="ex-name">${esc(e.ex?.name ?? e.name)}${e.slot.trial ? `<span class="pill trial-pill"><i class="ti ti-flask" aria-hidden="true"></i>${e.slot.trial.n}/${e.slot.trial.of}</span>` : e.mode === "calibrating" && e.logged.length === 0 ? `<span class="pill">Calibrating</span>` : ""}</div>
-        <div class="ex-sub">Exercise ${s.cur + 1} of ${s.exercises.length} · ${done ? "all sets done" : `set ${si + 1} of ${e.sets}`}${e.switchedFrom ? ` · instead of ${esc(e.switchedFrom)}` : e.slot.trial ? ` · instead of ${esc(e.slot.trial.fromName)}` : ""}</div>
+        <div class="ex-name">${esc(e.ex?.name ?? e.name)}${e.slot.trial ? `<span class="pill trial-pill"><i class="ti ti-flask" aria-hidden="true"></i>${e.slot.trial.n}/${e.slot.trial.of}</span>` : e.mode === "calibrating" && e.logged.length === 0 ? `<span class="pill">Calibrating</span>` : e.label && !done ? `<span class="pill lever ${LEVER_CLASS[e.lever] ?? ""}">${esc(e.label)}</span>` : ""}</div>
+        <div class="ex-sub">Exercise ${s.cur + 1} of ${s.exercises.length} · ${done ? "all sets done" : `set ${si + 1} of ${e.sets}`}${e.switchedFrom ? ` · instead of ${esc(e.switchedFrom)}` : e.slot.trial ? ` · instead of ${esc(e.slot.trial.fromName)}` : ""}${e.addOn ? ` · added for ${esc(niceMuscleName(e.addOn))}` : ""}</div>
+        ${partner != null ? `<div class="ex-sub superset-tag"><i class="ti ti-link" aria-hidden="true"></i> Superset with ${esc(s.exercises[partner].ex?.name ?? s.exercises[partner].name)}: alternate, rest after the pair</div>` : ""}
       </div>
       <div class="ex-nav">
         <button class="icon-btn" id="prev-ex" aria-label="Previous exercise" ${s.cur === 0 ? "disabled" : ""}><i class="ti ti-chevron-left" aria-hidden="true"></i></button>
@@ -128,7 +172,10 @@ function nowCard(s, e) {
     <div class="units"><span style="min-width:120px">${unitsFor(e.ex)}</span><span>reps</span></div>`}
     ${lastTimeRow(s, e)}
     ${reasonText ? `<button class="reason" id="why"><i class="ti ${icon}" aria-hidden="true"></i><span>${esc(reasonText)}</span></button>` : ""}
+    ${technique}
+    ${done ? "" : sorenessAsk(s, e)}
     <div class="sets">${rows}</div>
+    ${done ? afterAsk(s, e, s.cur) : ""}
     ${e.stopped ? `<div class="label stopped"><i class="ti ti-hand-stop" aria-hidden="true"></i> ${e.logged.length ? `Stopped after ${e.logged.length} of ${e.stopped.of} sets` : "Skipped"}</div>` : ""}
     ${e.userNote ? `<button class="ex-note" id="note-btn" aria-label="Edit note"><i class="ti ti-note" aria-hidden="true"></i><span>${esc(e.userNote)}</span></button>` : ""}
     ${done ? `<div class="card-links">
@@ -182,7 +229,9 @@ function upNext(s) {
     if (i === s.cur) return "";
     const p = x.plan?.sets?.[x.logged.length] ?? x.plan?.sets?.[0];
     const right = x.stopped ? (x.logged.length ? `stopped · ${x.logged.length} of ${x.stopped.of}` : "skipped") : isDone(x) ? `${x.logged.length} sets` : p ? `${x.sets} × ${p.reps} · ${fmt(p.load)}` : `${x.sets} sets`;
-    return `<button data-jump="${i}" class="${isDone(x) ? "done-row" : ""}"><span>${x.stopped ? `<i class="ti ti-hand-stop stopped" aria-hidden="true"></i>` : isDone(x) ? `<i class="ti ti-circle-check" aria-hidden="true"></i>` : ""}${esc(x.ex?.name ?? x.name)}${x.userNote ? ` <i class="ti ti-note mut" aria-label="has a note"></i>` : ""}</span><span class="mut">${right}</span></button>`;
+    const tag = x.superset ? ` <i class="ti ti-link mut" aria-label="superset"></i>` : "";
+    const lever = !isDone(x) && x.label ? ` <span class="lever-mini ${LEVER_CLASS[x.lever] ?? ""}">${esc(x.label)}</span>` : "";
+    return `<button data-jump="${i}" class="${isDone(x) ? "done-row" : ""}"><span>${x.stopped ? `<i class="ti ti-hand-stop stopped" aria-hidden="true"></i>` : isDone(x) ? `<i class="ti ti-circle-check" aria-hidden="true"></i>` : ""}${esc(x.ex?.name ?? x.name)}${tag}${x.userNote ? ` <i class="ti ti-note mut" aria-label="has a note"></i>` : ""}${lever}</span><span class="mut">${right}</span></button>`;
   }).join("");
   return items ? `<section class="next"><h2>Up next</h2>${items}</section>` : "";
 }
@@ -214,18 +263,38 @@ function finishBlock(s) {
   return "";
 }
 
-// What the generator decided before showing today's workout, and why.
+// The data says you're run down: offer a deload (never automatic).
+function deloadCard(s) {
+  if (!s.deloadSignal || s.deloadDismissed || anyLogged(s) || s.weekInfo?.deload) return "";
+  return `<section class="card check" aria-label="Deload suggestion">
+    <div class="label" style="margin-top:0"><i class="ti ti-battery-2" aria-hidden="true"></i> Time to back off?</div>
+    <p class="review-txt">${esc(s.deloadSignal.reason)} A deload week (same exercises, half the sets, easy effort) usually brings the numbers back up.</p>
+    <div class="prop-acts">
+      <button class="primary" id="deload-yes" style="height:44px;font-size:19px;margin:0">Deload this week</button>
+      <button class="secondary" id="deload-no" style="height:44px">Not now</button>
+    </div>
+  </section>`;
+}
+
+// What the generator decided before showing today's workout, and why: one
+// line on the Train screen, the full list a tap away (keeps the current
+// exercise above the fold).
 function checkCard(s) {
   const fixes = (s.adjustments ?? []).filter((n) => n.kind === "fix");
   const notes = (s.adjustments ?? []).filter((n) => n.kind === "note");
   if (!s.selection && !fixes.length && !notes.length) return "";
   if (anyLogged(s)) return "";
-  const items = [...fixes, ...notes].map((n) => `<li>${esc(n.text)}</li>`).join("");
-  return `<section class="card check" aria-label="Why this workout">
-    <div class="label" style="margin-top:0"><i class="ti ti-shield-check" aria-hidden="true"></i> Checked before you start</div>
-    ${s.selection ? `<p class="review-txt">${esc(s.selection)}</p>` : ""}
-    ${items ? `<ul class="check-list">${items}</ul>` : ""}
-  </section>`;
+  const n = fixes.length + notes.length;
+  const lead = notes[0]?.text ?? fixes[0]?.text ?? s.selection;
+  return `<button class="reason check-line" id="check-btn" aria-label="Why this workout"><i class="ti ti-shield-check" aria-hidden="true"></i><span><b>Built for today${n > 1 ? ` · ${n} adjustments` : ""}:</b> ${esc(lead)}</span><i class="ti ti-chevron-right" aria-hidden="true"></i></button>`;
+}
+
+function checkSheet() {
+  const s = state.session;
+  const items = (s.adjustments ?? []).map((n) => `<li>${esc(n.text)}</li>`).join("");
+  sheet(`<h2>Built for today</h2><div class="sub">${esc(s.dayLabel)}${s.minutes ? ` · about ${s.minutes} minutes` : ""}</div>
+    ${s.selection ? `<p class="review-txt" style="margin:10px 0">${esc(s.selection)}</p>` : ""}
+    ${items ? `<ul class="check-list">${items}</ul>` : ""}`);
 }
 
 function assessmentCard(a) {
@@ -270,6 +339,18 @@ function bindReviews(root) {
 
 function bind(root, s) {
   root.querySelector("#day-btn")?.addEventListener("click", dayPicker);
+  root.querySelector("#check-btn")?.addEventListener("click", checkSheet);
+  root.querySelector("#deload-yes")?.addEventListener("click", () => { deloadNow(); toast("Deload week: half the sets, easy effort"); });
+  root.querySelector("#deload-no")?.addEventListener("click", () => setSession({ ...state.session, deloadDismissed: true }));
+  root.querySelectorAll("[data-fb]").forEach((b) => b.addEventListener("click", () => {
+    const kind = b.dataset.fb, v = Number(b.dataset.v);
+    const muscle = b.dataset.muscle ?? b.closest("[data-muscle]")?.dataset.muscle ?? null;
+    const exerciseId = b.dataset.ex ?? null;
+    addFeedback({ date: s.date, sessionKey: s.sessionKey, ...(kind === "joints" ? { exerciseId } : { muscle }), [kind]: v });
+    buzz(10);
+    if (kind === "soreness" && v === 3) toast(`Still sore: one fewer ${niceMuscleName(muscle)} set and an extra rep in the tank today`);
+    if (kind === "joints" && v === 2) toast("Painful: tell the coach or switch it. Never train through joint pain.");
+  }));
   root.querySelectorAll("[data-rir]").forEach((b) => b.addEventListener("click", () => {
     const planned = target(s.exercises[s.cur]).rir ?? 2;
     chosenRir = rirFor(b.dataset.rir, planned);
@@ -380,6 +461,26 @@ function finishEarlySheet() {
   });
 }
 
+// Right after an exercise's last set: joints for it, and pump/workload for
+// any muscle that's finished for today. Optional; tap outside to skip.
+function feedbackSheet(exIdx) {
+  const s = state.session;
+  const e = s.exercises[exIdx];
+  if (!e?.ex) return;
+  const el = sheet(`<h2>How was ${esc(e.ex.name)}?</h2><div class="sub">Optional, two seconds: this is how next time's sets get decided.</div>${afterAsk(s, e, exIdx, { inSheet: true })}<button class="secondary" id="fb-done" style="margin-top:12px">Done</button>`);
+  el.querySelectorAll("[data-fb]").forEach((b) => b.addEventListener("click", () => {
+    const kind = b.dataset.fb, v = Number(b.dataset.v);
+    addFeedback({ date: s.date, sessionKey: s.sessionKey, ...(kind === "joints" ? { exerciseId: b.dataset.ex } : { muscle: b.dataset.muscle }), [kind]: v });
+    el.querySelectorAll(`[data-fb="${kind}"]${b.dataset.muscle ? `[data-muscle="${b.dataset.muscle}"]` : ""}`).forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+    buzz(10);
+    if (kind === "joints" && v === 2) toast("Painful: tell the coach or switch it. Never train through joint pain.");
+    const groups = new Set([...el.querySelectorAll("[data-fb]")].map((x) => `${x.dataset.fb}|${x.dataset.muscle ?? ""}`));
+    const answered = new Set([...el.querySelectorAll('[data-fb][aria-pressed="true"]')].map((x) => `${x.dataset.fb}|${x.dataset.muscle ?? ""}`));
+    if (answered.size >= groups.size) setTimeout(closeSheet, 250);
+  }));
+  el.querySelector("#fb-done").addEventListener("click", closeSheet);
+}
+
 function commit(exIdx, entry) {
   primeAlerts();
   const before = state.session;
@@ -388,9 +489,15 @@ function commit(exIdx, entry) {
   buzz(15);
   setSession(next, { undoable: true });
   const ex = e.ex;
-  if (!isDone(next.exercises[exIdx]) || !sessionDone(next)) startRest(ex, { next: nextUpText(next) });
+  // Supersets: a short walk to the partner after the first one, a shared rest after the second.
+  const partner = partnerOf(next, exIdx);
+  const partnerOpen = partner != null && !isDone(next.exercises[partner]);
+  const seconds = partnerOpen ? (partner > exIdx ? 20 : 75) : null;
+  if (!isDone(next.exercises[exIdx]) || !sessionDone(next)) startRest(ex, { next: nextUpText(next), seconds });
+  const finished = isDone(next.exercises[exIdx]) && !isDone(e) && entry.index == null;
   const what = isDone(next.exercises[exIdx]) ? `${ex?.name ?? e.name} done` : `Set ${(entry.index ?? e.logged.length) + 1} logged`;
   toast(what, { label: "Undo", fn: () => { undo(); toast("Set removed"); } });
+  if (finished && ex && feedbackFor(next.date, { exerciseId: ex.id })?.joints == null) setTimeout(() => feedbackSheet(exIdx), 350);
 }
 
 // What the rest alert says is next, e.g. "Lat pulldown · set 3: 140 × 10".
@@ -412,18 +519,39 @@ function dayPicker() {
   }));
 }
 
+const LEVER_WHY = {
+  "add-reps": "You were inside your rep range last time, so the job today is one more rep at the same weight. When the top set reaches the top of the range, the weight goes up.",
+  "add-load": "You reached the top of the rep range, so the weight goes up by the smallest sensible step and the reps start again lower in the range.",
+  coarse: "The next weight available is too big a jump, so you earn it with extra reps first (the range stretches by up to 3 reps).",
+  hold: "Holding today: either last time was a grind, you were under the range, or it's been a while. Owning these numbers is the progress.",
+  "back-off": "Two sessions in a row under the range means the weight is ahead of you. A little lighter gets you back into the range where you can progress again.",
+  recalibrate: "It's been 4+ weeks on this one, so it starts a bit lighter with a rep to spare and set 1 resets the numbers.",
+  intensify: "No progress for a few sessions, so the plan stays and a technique on the last set adds stimulus without adding a whole set.",
+  deload: "Deload week: same weights, well short of failure, half the sets. Fatigue drops so the next block can push harder.",
+};
 function whySheet() {
-  const e = state.session.exercises[state.session.cur];
+  const s = state.session;
+  const e = s.exercises[s.cur];
   const r = e.plan?.reason;
   const lines = [];
   if (e.plan?.text) lines.push(esc(e.plan.text));
-  if (r) {
-    lines.push(`Strength estimate: <b>${Math.round(r.e1rm)} lb</b>${r.changePct != null && Math.abs(r.changePct) >= 0.5 ? ` (${r.changePct > 0 ? "+" : ""}${r.changePct}% since last time)` : ""}.`);
-    lines.push(`Target: ${r.aimReps} reps with ${r.rir} left, at the closest load you can make.`);
-    lines.push(`Fatigue: each set after the first costs you about ${Math.round((1 - r.decay) * 1000) / 10}% of your strength, which is why later sets get fewer reps.`);
+  if (e.lever && LEVER_WHY[e.lever]) lines.push(`<b>${esc(e.label ?? e.lever)}:</b> ${esc(LEVER_WHY[e.lever])}`);
+  if (r?.range) lines.push(`Rep range ${r.range[0]}–${r.range[1]}, ${r.rir} rep${r.rir === 1 ? "" : "s"} left in the tank${s.block ? ` (week ${s.block.week} of ${s.block.of}${s.block.deload ? ", deload" : ""})` : ""}.`);
+  else if (r?.aimReps) lines.push(`Target: ${r.aimReps} reps with ${r.rir} left, at the closest load you can make.`);
+  if (r?.e1rm) lines.push(`Strength estimate: <b>${Math.round(r.e1rm)} lb</b>. It's used to pick the weight when the load changes and to adjust the rest of today's sets after each one.`);
+  const plan = state.plan;
+  if (plan && e.ex) {
+    const ms = Object.entries(e.ex.contributions).filter(([m, c]) => c >= 1 && plan.muscles[m]).map(([m]) => [m, plan.muscles[m]]);
+    for (const [m, x] of ms) lines.push(`${esc(cap(niceMuscleName(m)))}: ${x.done7} sets in the last 7 days, aiming for about ${x.weeklyTarget} a week (${x.perSession} per session${x.lastChange?.d ? `; last change ${x.lastChange.d > 0 ? "+" : ""}${x.lastChange.d}, ${esc(x.lastChange.why)}` : ""}).`);
   }
   if (e.mode === "calibrating") lines.push("Set 1 is a calibration set: the sets after it are recalculated from what you actually do.");
-  sheet(`<h2>Why these numbers</h2><div class="sub">${esc(e.ex?.name ?? e.name)}</div>${lines.map((l) => `<p style="margin:10px 0;font-size:15px;line-height:1.5">${l}</p>`).join("")}`);
+  const t = target(e);
+  const el = sheet(`<h2>Why these numbers</h2><div class="sub">${esc(e.ex?.name ?? e.name)}</div>${lines.map((l) => `<p style="margin:10px 0;font-size:15px;line-height:1.5">${l}</p>`).join("")}
+    <button class="secondary" id="why-ask" style="margin-top:8px"><i class="ti ti-message-circle" aria-hidden="true"></i> Ask the coach about this</button>`);
+  el.querySelector("#why-ask").addEventListener("click", () => {
+    closeSheet();
+    askAbout(`${e.ex?.name ?? e.name} is ${t.load} × ${t.reps} today. `);
+  });
 }
 
 function editSheet(index) {
