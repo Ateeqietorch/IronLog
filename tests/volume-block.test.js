@@ -151,3 +151,14 @@ test("directives validate, override by scope, and keep tombstones", () => {
   assert.equal(r.schedule.minutes, null);
   assert.equal(describeDirective(list[2]), "Prioritize side delts");
 });
+
+test("technique switches are independent, and the latest one for each wins", () => {
+  const r = resolveDirectives([
+    { id: "d1", kind: "technique", block: ["add-ons"], at: "2026-11-06" },
+    { id: "d2", kind: "technique", allow: ["supersets"], at: "2026-11-07" },
+    { id: "d3", kind: "technique", block: ["supersets"], at: "2026-11-07" },
+  ]);
+  assert.equal(r.techniques["add-ons"], false);
+  assert.equal(r.techniques.supersets, false);
+  assert.equal(r.techniques["myo-reps"], true);
+});

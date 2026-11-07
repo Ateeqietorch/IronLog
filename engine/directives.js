@@ -82,15 +82,19 @@ const slotKey = (d) => {
     case "muscle_priority": return `${d.kind}|${d.muscle}`;
     case "seed": return `${d.kind}|${d.exerciseId}`;
     case "volume": case "deload": case "new_block": return `${d.kind}|${d.id}`;
+    case "technique": return `${d.kind}|${[...(d.allow ?? []), ...(d.block ?? [])].sort().join(",")}`;
     default: return d.kind;
   }
 };
 
+// Oldest first: same day breaks ties by id, which increases with time.
+const chrono = (a, b) => String(a.at ?? "").localeCompare(String(b.at ?? "")) || String(a.id).localeCompare(String(b.id));
+
 export function activeDirectives(list = []) {
   const live = list.filter((d) => d && !d.removed);
   const byKey = new Map();
-  for (const d of [...live].sort((a, b) => String(a.at ?? "").localeCompare(String(b.at ?? "")))) byKey.set(slotKey(d), d);
-  return [...byKey.values()];
+  for (const d of [...live].sort(chrono)) { byKey.delete(slotKey(d)); byKey.set(slotKey(d), d); }
+  return [...byKey.values()].sort(chrono);
 }
 
 // Everything the planner needs, resolved.

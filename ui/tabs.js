@@ -96,17 +96,22 @@ export function renderProgress(root) {
   const live = state.session && !state.session.saved;
   const muscleRows = muscles.map(([m, x]) => `<button class="row mrow" data-muscle="${esc(m)}"><span>${esc(cap(niceMuscleName(m)))}${x.level === "specialize" ? ` <span class="pill lever up">Priority</span>` : x.level === "maintain" ? ` <span class="pill">Maintain</span>` : ""}<br><span class="mut" style="font-size:12px">~${Math.round(x.perSession)} sets a session · ${x.freq < 1 ? "less than once a week" : `${Math.round(x.freq * 10) / 10}× a week`}${live && x.today >= 1 ? ` · ${Math.round(x.today)} today` : ""}</span>${bar(x)}</span><span class="r"><span class="num" style="font-size:22px;color:var(--silver)">${Math.round(x.done7)}</span><br>of ~${Math.round(x.weeklyTarget)}/wk</span></button>`).join("");
   const volume = plan ? `<div class="group-title">Sets per muscle, last 7 days</div>
-    <div class="mut" style="font-size:13px;margin:-4px 0 8px">Bar: done. Line: minimum to grow. Red tick: this week's target, which moves with your feedback after each workout.</div>
+    <div class="mut" style="font-size:13px;margin:-4px 16px 8px">Bar: done. Line: minimum to grow. Red tick: this week's target, which moves with your feedback after each workout.</div>
     <div class="rows">${muscleRows}</div>` : "";
 
   const dirsLive = liveDirectives();
   const dirRows = dirsLive.map((d) => `<div class="rule-row"><span>${esc(describeDirective(d, state.index))}<br><span class="mut">${d.source === "coach" ? "Set by your coach" : "Set by you"}${d.at ? ` · ${esc(fmtDate(d.at))}` : ""}${d.note ? ` · ${esc(d.note)}` : ""}</span></span><button class="icon-btn" data-rmdir="${esc(d.id)}" aria-label="Remove"><i class="ti ti-x" aria-hidden="true"></i></button></div>`).join("");
   const dirs = `<div class="group-title">Coaching rules</div>
-    <div class="mut" style="font-size:13px;margin:-4px 0 8px">The engine plans every workout with these. Ask the coach to add one ("no sets under 8 reps", "prioritize side delts"), or use the buttons.</div>
+    <div class="mut" style="font-size:13px;margin:-4px 16px 8px">The engine plans every workout with these. Ask the coach to add one ("no sets under 8 reps", "prioritize side delts"), or use the buttons.</div>
     <div class="rows">${dirRows || `<div class="row mut">None yet.</div>`}</div>
     <div class="prop-acts" style="margin-top:10px">
       <button class="secondary" id="pl-prio" style="height:44px">Prioritize a muscle</button>
       <button class="secondary" id="pl-floor" style="height:44px">Minimum reps</button>
+    </div>
+    <div class="rows" style="margin-top:10px">
+      ${toggleRow("pl-addons", "Extra sets for lagging muscles", "A short 2–3 set exercise on a day that doesn't train them", dir.techniques["add-ons"] !== false)}
+      ${toggleRow("pl-supersets", "Supersets when short on time", "Pairs isolation exercises when a workout runs over your minutes", dir.techniques.supersets !== false)}
+      ${toggleRow("pl-tech", "Myo-reps and partials when stuck", "Added to the last set after a few sessions without progress", dir.techniques["myo-reps"] !== false)}
     </div>`;
 
   const entries = Object.entries(state.models)
@@ -133,12 +138,20 @@ export function renderProgress(root) {
   root.querySelector("#pl-days")?.addEventListener("click", () => numberSheet("Days a week you can train", dir.schedule.daysPerWeek ?? plan?.daysPerWeek ?? 4, 1, 7, (v) => addDirective({ kind: "schedule", daysPerWeek: v, minutes: dir.schedule.minutes ?? undefined }), "Used to spread each muscle's weekly sets over the days you actually train."));
   root.querySelector("#pl-mins")?.addEventListener("click", () => numberSheet("Minutes per workout", dir.schedule.minutes ?? plan?.budget ?? 75, 20, 150, (v) => addDirective({ kind: "schedule", minutes: v, daysPerWeek: dir.schedule.daysPerWeek ?? undefined }), "Over this, isolation work becomes supersets first, then sets come off muscles that are already ahead.", 5));
   root.querySelector("#pl-prio")?.addEventListener("click", prioritySheet);
+  const tech = (id, names) => root.querySelector(`#${id}`)?.addEventListener("change", (ev) => {
+    addDirective({ kind: "technique", ...(ev.target.checked ? { allow: names } : { block: names }) });
+    toast(ev.target.checked ? "On" : "Off");
+  });
+  tech("pl-addons", ["add-ons"]);
+  tech("pl-supersets", ["supersets"]);
+  tech("pl-tech", ["myo-reps", "lengthened-partials"]);
   root.querySelector("#pl-floor")?.addEventListener("click", () => numberSheet("No sets under this many reps", dir.minReps.all ?? 8, 3, 15, (v) => addDirective({ kind: "rep_floor", minReps: v, scope: "all" }), "Every rep range starts at least here. Sets that would fall under it get a lighter back-off weight."));
   root.querySelectorAll("[data-rmdir]").forEach((x) => x.addEventListener("click", () => { if (confirm("Remove this rule?")) { removeDirective(x.dataset.rmdir); toast("Removed"); } }));
   root.querySelectorAll(".mrow").forEach((x) => x.addEventListener("click", () => muscleSheet(x.dataset.muscle, plan)));
 }
 
 const cap = (x) => (x ? x[0].toUpperCase() + x.slice(1) : x);
+const toggleRow = (id, label, sub, on) => `<div class="toggle-row" style="align-items:flex-start;padding:10px 0;border-bottom:1px solid var(--seam)"><span>${esc(label)}<br><span class="mut" style="font-size:13px">${esc(sub)}</span></span><input type="checkbox" id="${id}" ${on ? "checked" : ""} style="width:22px;height:22px;flex:none;margin-left:12px;accent-color:var(--red-fill)" /></div>`;
 
 function numberSheet(title, value, min, max, onSave, sub = "", step = 1) {
   const el = sheet(`<h2>${esc(title)}</h2>${sub ? `<div class="sub">${esc(sub)}</div>` : ""}
