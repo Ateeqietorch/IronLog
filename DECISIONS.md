@@ -112,3 +112,8 @@ Ateeq stopped single-leg press after two sets (left adductor) and the log just l
 - **Three effort buttons (Failed / 1–2 left / 3+ left) instead of 0–4+.** Ateeq's ratings drift ±2 for identical sets; the 1-vs-2 call is the noisy part. A bucket takes the plan's exact RIR when the plan falls inside it, so "done as planned" is still exact. Chosen over "rate only the last set" because in-session adjustment needs a reading on every set.
 - **A set you did is a floor on today's strength.** Planned 50×10, did 75×12 used to give 55×11 next (the half-step cap and outlier gate treated it as noise). Now today's estimate is raised to at least what that set proves, counting at most 1 rep in reserve; the next sets became 75×10, 75×9. The near-failure ceiling still wins when both apply. The long-term model update is unchanged.
 - **Load is re-picked as soon as the next set would leave the rep range by more than 1** (was 2 below / 3 above), so a big miss moves the weight on the next set.
+
+## 2026-11-07 — Meal estimates and grocery list
+- Meal estimates go through the existing `coach_step` relay rather than a new backend action, so no redeploy is needed for them. The model must answer through a `meal_estimate` tool, so the app always gets structured numbers; a text-only reply is shown as the error (usually a clarifying question).
+- Meals are stored inside the day's intake record and change its totals additively; the totals stay the single source the check-in reads.
+- The grocery plan is a fixed staple template scaled to targets, not a meal planner: simple to shop for, easy to swap within a group.

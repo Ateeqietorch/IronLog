@@ -257,3 +257,10 @@ body:not([data-tab="train"]) .app.resting { padding-bottom: calc(68px + env(safe
 .spark { width: 100%; height: 70px; margin-top: 8px; display: block; }
 .spark .sp-line { fill: none; stroke: var(--red); stroke-width: 2; }
 .spark .sp-dot { fill: var(--steel); }
+
+#nu-meal { width: 100%; box-sizing: border-box; background: var(--iron); color: inherit; border: 1px solid var(--seam); border-radius: var(--r-control); padding: 10px; font: inherit; font-size: 15px; resize: vertical; }
+.meal-row { align-items: center; }
+.groc-item { display: flex; align-items: center; gap: 10px; padding: 9px 2px; border-bottom: 1px solid var(--seam); font-size: 15px; }
+.groc-item span:nth-child(2) { flex: 1; }
+.groc-item input { width: 20px; height: 20px; accent-color: var(--red); }
+.groc-item input:checked + span { text-decoration: line-through; opacity: .55; }

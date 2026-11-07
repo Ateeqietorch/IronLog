@@ -1,4 +1,4 @@
-const CACHE_NAME = "ironlog-shell-v15";
+const CACHE_NAME = "ironlog-shell-v16";
 const SHELL_FILES = [
   "./",
   "./index.html",
@@ -45,6 +45,8 @@ const SHELL_FILES = [
   "./engine/brain.js",
   "./ui/agent.js",
   "./engine/nutrition.js",
+  "./engine/foods.js",
+  "./ui/meals.js",
   "./ui/nutrition.js"
 ];
 

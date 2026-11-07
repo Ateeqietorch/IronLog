@@ -11,9 +11,11 @@
 import {
   state, today, directives, liveDirectives, addDirective, removeDirective, applyProposal, addFeedback, planFor,
   addConstraint, removeConstraint, snapshotState, restoreState, brainSnapshot, ls,
-  nutritionView, setNutrition, logWeight, logIntake,
+  nutritionView, setNutrition, logWeight, logIntake, addMeal,
 } from "./store.js";
 import { GOALS, ACTIVITY } from "../engine/nutrition.js";
+import { groceryPlan } from "../engine/foods.js";
+import { normalizeMeal } from "./meals.js";
 import { active, describe as describeRule } from "../data/constraints.js";
 import { describeDirective, KINDS, TECHNIQUES, niceMuscleName } from "../engine/directives.js";
 import { MUSCLES, PATTERNS } from "../engine/catalog.js";
@@ -142,6 +144,20 @@ export const TOOLS = [
     description: "Log a weigh-in (lb) and/or what they ate today (calories, protein g) when they tell you in words.",
     input_schema: { type: "object", properties: { weight: { type: "number" }, kcal: { type: "number" }, protein: { type: "number" }, date: { type: "string" } } },
   },
+  {
+    name: "log_meal",
+    description: "Log a meal they describe in words (homemade, restaurant, no label). You estimate it: break it into items with realistic portions (count oil, butter, sauces, drinks), calories and macros per item. The app adds it to today's food. Use mode apply when they ask you to log it; propose when you're unsure of the portions and want them to confirm.",
+    input_schema: { type: "object", properties: {
+      mode: { type: "string", enum: ["apply", "propose"] }, name: { type: "string" }, date: { type: "string" },
+      items: { type: "array", items: { type: "object", properties: { food: { type: "string" }, amount: { type: "string" }, kcal: { type: "number" }, protein: { type: "number" }, carbs: { type: "number" }, fat: { type: "number" } }, required: ["food", "amount", "kcal", "protein", "carbs", "fat"] } },
+      assumptions: { type: "string" },
+    }, required: ["mode", "name", "items"] },
+  },
+  {
+    name: "get_groceries",
+    description: "This week's grocery list and a sample day of macro-friendly staples sized to their current targets (what the Macros tab's grocery list shows).",
+    input_schema: { type: "object", properties: {} },
+  },
   { name: "remember", description: "Save a durable fact about the lifter that isn't a rule or directive (equipment, schedule constraints, injuries history). One short sentence.", input_schema: { type: "object", properties: { note: { type: "string" } }, required: ["note"] } },
   { name: "forget", description: "Delete a remembered note by id.", input_schema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] } },
 ];
@@ -160,7 +176,7 @@ const RULES = [
   "mode: apply when the lifter asked for the change (they can undo it). propose when it's your own idea (they get Apply / Not now). Never claim something changed unless a tool applied it.",
   "Look before you explain: if they ask why a number is what it is, read get_plan or get_exercise and explain the lever and the last session it came from. Be proactive about real problems you see in context (a muscle far under its minimum, pain notes, a stalled lift, sessions over time) and propose the fix.",
   "Evidence you can rely on: ~10+ hard sets per muscle per week, most sets 0–3 reps from failure, 5–30 reps all build muscle when close to failure, rest 90 s+, stretched-position exercises have a small edge, deloads every 4–6 weeks or when performance drops. Never tell them to train through sharp or joint pain; suggest a pain-free alternative and a professional if it persists. Breaks happen; muscle comes back faster the second time, so the best program is the one they can keep doing.",
-  "Nutrition: the app sets daily calories and macros from a resting-burn estimate, then a weekly check-in compares intake (logged, or targets assumed eaten) with the weight trend to find real expenditure, and moves calories ≤250 at a time toward the goal rate (cut 0.5–1%/wk keeps muscle, lean gain 0.25–0.5%/wk). Protein 1 g/lb cutting, 0.9 maintaining, 0.8 gaining; fat ~25% (floor 0.3 g/lb); carbs the rest; never below resting burn. Change goals with set_nutrition; never invent calorie numbers, read get_nutrition. Training and diet interact: in a hard cut, expect strength to hold rather than climb, and suggest a slower rate if performance drops on several muscles. No extreme diets; if they mention restricting, bingeing or purging, be supportive and don't give numbers.",
+  "Nutrition: the app sets daily calories and macros from a resting-burn estimate, then a weekly check-in compares intake (logged, or targets assumed eaten) with the weight trend to find real expenditure, and moves calories ≤250 at a time toward the goal rate (cut 0.5–1%/wk keeps muscle, lean gain 0.25–0.5%/wk). Protein 1 g/lb cutting, 0.9 maintaining, 0.8 gaining; fat ~25% (floor 0.3 g/lb); carbs the rest; never below resting burn. Change goals with set_nutrition; never invent calorie numbers, read get_nutrition. Training and diet interact: in a hard cut, expect strength to hold rather than climb, and suggest a slower rate if performance drops on several muscles. Meals without a label (homemade, restaurant): estimate them yourself and log with log_meal, item by item, counting cooking oil and drinks; say what portion you assumed. Food ideas and shopping: get_groceries gives a week's list sized to their targets; suggest swaps within the same group (Greek yogurt, skyr, cottage cheese; chicken, turkey, white fish, shrimp, lean beef; rice, potatoes, oats). No extreme diets; if they mention restricting, bingeing or purging, be supportive and don't give numbers.",
   "Use add_rule when they don't want an exercise or something hurts; remember for other durable facts. Don't name your tools to the lifter.",
 ].join("\n");
 
@@ -364,6 +380,7 @@ const WRITES = {
   set_directive: { run: applyDirective, label: (i) => describeDirective({ ...i, at: today() }, state.index) },
   remove_directive: { run: ({ id }) => { const d = liveDirectives().find((x) => x.id === id); if (!d) return { error: "No directive with that id." }; removeDirective(id); return { removed: describeDirective(d, state.index), today: todayPlanText() }; }, label: (i) => `Remove: ${describeDirective(liveDirectives().find((x) => x.id === i.id) ?? { kind: "?" }, state.index)}` },
   set_nutrition: { run: applyNutrition, label: (i) => i.summary || [i.goal ? `Goal: ${GOALS[i.goal]?.label}${i.ratePct ? ` at ${i.ratePct}%/week` : ""}` : i.ratePct != null ? `Rate: ${i.ratePct}%/week` : null, i.proteinPerLb ? `Protein ${i.proteinPerLb} g/lb` : null, i.activity ? `Activity: ${ACTIVITY[i.activity]?.label}` : null].filter(Boolean).join(", ") },
+  log_meal: { run: (i) => { const m = normalizeMeal(i); if (!m.items.length) return { error: "Need at least one item." }; addMeal({ ...m, source: "coach" }, i.date ?? today()); const v = nutritionView(); return { logged: `${m.name}: ${m.kcal} kcal, P${m.protein} C${m.carbs} F${m.fat}`, todayEaten: v.today ? { kcal: v.today.kcal, protein: v.today.protein } : null, target: v.target ? `${v.target.kcal} kcal, P${v.target.protein}` : null }; }, label: (i) => { const m = normalizeMeal(i); return `Log ${m.name} (${m.kcal} kcal, P${m.protein})`; } },
   change_workout: { run: applyWorkout, label: (i) => i.summary || (i.changes ?? []).map((c) => (state.session ? describeChange(state.session, c, state.index) : c.type)).join("; ") },
 };
 
@@ -381,6 +398,12 @@ export async function runTool(name, input, sink) {
       return { saved: true, today: todayPlanText() };
     }
     case "get_nutrition": return getNutrition();
+    case "get_groceries": {
+      const t = nutritionView().target;
+      if (!t) return { error: "No targets yet: they need to set up the Macros tab and log a weight." };
+      const g = groceryPlan(t);
+      return { target: t, sampleDay: g.day.map((x) => `${x.meal}: ${x.n} × ${x.serving} ${x.name}`), dayTotals: g.totals, week: g.week.map((x) => `${x.name}: ${x.amount != null ? `${x.amount}${/^\d/.test(x.unit) ? " ×" : ""} ${x.unit}` : `${x.servings} servings`}`) };
+    }
     case "log_body": {
       const out = {};
       if (input.weight != null) out.weight = logWeight(input.weight, input.date ?? today()) ? "saved" : "looks wrong";
@@ -443,7 +466,7 @@ async function step(payload) {
 const STATUS = {
   get_plan: "Reading today's plan", get_exercise: "Looking at your history", get_muscle: "Checking your volume", search_exercises: "Searching exercises",
   set_directive: "Updating your plan", remove_directive: "Updating your plan", change_workout: "Changing the workout", log_feedback: "Noting that",
-  add_rule: "Saving a rule", remember: "Remembering that", get_nutrition: "Checking your nutrition", set_nutrition: "Updating your targets", log_body: "Logging that",
+  add_rule: "Saving a rule", remember: "Remembering that", get_nutrition: "Checking your nutrition", log_meal: "Logging that meal", get_groceries: "Building your grocery list", set_nutrition: "Updating your targets", log_body: "Logging that",
 };
 
 // history: earlier turns as [{ role, content: text }]. Returns

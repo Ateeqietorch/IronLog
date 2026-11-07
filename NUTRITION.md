@@ -18,3 +18,13 @@ Weigh-ins go to the existing **Bodyweight** sheet (one per day; uploads queue of
 - Helms, Aragon & Fitschen 2014 (JISSN): lose 0.5–1%/wk; protein 2.3–3.1 g/kg lean mass; fat 15–30%; carbs the rest.
 - Iraki et al. 2019 (Sports): gain ~0.25–0.5%/wk (novice/intermediate), surplus ~10–20%; protein 1.6–2.2 g/kg; fat 0.5–1.5 g/kg; carbs ≥3–5 g/kg.
 - MacroFactor: expenditure = intake − weight trend energy (~500 kcal/day per lb/week); targets step down gradually until the goal rate is reached.
+
+## Meals described in words (AI estimate)
+
+Homemade and restaurant food rarely has a label. On the Macros tab, "Describe a meal" sends the description to Claude (through the same `coach_step` relay the coach uses) with a meal-estimator prompt. Claude itemizes it (portions, cooking oil, sauces, drinks) and returns calories and macros per item, its assumptions and a confidence level. You can scale the portion (0.5×–2×) before adding it. A meal adds to the day's totals; removing it subtracts them again. Typing totals in "Log today" still overwrites the day.
+
+The coach can do the same from chat ("log the biryani I just had"): the `log_meal` tool adds it with Undo.
+
+## Grocery list
+
+`engine/foods.js` holds about 37 macro-friendly staples (Greek yogurt, skyr, cottage cheese, chicken, lean beef and turkey, salmon, shrimp, eggs, whey, oats, rice, potatoes, fruit, vegetables, fats, zero-calorie flavor), each with a serving, macros, a shopping unit and a tip. `groceryPlan(target)` builds a sample day from a fixed template: lean protein is scaled to the protein target, fats to the fat target, then starches fill the remaining calories, all in half servings. Dinner protein rotates (beef, salmon, shrimp, turkey). The week's list multiplies that out into shopping amounts (lb, dozen, tubs, bags). The plan lands within about 10% of calories and at or above the protein target. Ticks on the list are stored per week on the phone. The coach reads the same list with `get_groceries`.

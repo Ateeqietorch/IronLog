@@ -747,3 +747,29 @@ export function logIntake({ kcal = null, protein = null, date = today() } = {}) 
   emit();
   return rec;
 }
+
+// Meals (AI-estimated or quick-added): stored with the day and added to its
+// totals; removing one takes it back out.
+let mealSeq = 0;
+export function addMeal(meal, date = today()) {
+  const n = state.nutrition;
+  const prev = n.intake.find((x) => x.date === date) ?? { date };
+  const m = { id: `m${Date.now().toString(36)}${(mealSeq++).toString(36)}`, name: meal.name, kcal: meal.kcal, protein: meal.protein, carbs: meal.carbs, fat: meal.fat, items: meal.items ?? [], source: meal.source ?? "ai", ...(meal.text ? { text: meal.text } : {}) };
+  const add = (k) => (Number(prev[k]) || 0) + (Number(m[k]) || 0);
+  const rec = { ...prev, kcal: add("kcal"), protein: add("protein"), carbs: add("carbs"), fat: add("fat"), meals: [...(prev.meals ?? []), m] };
+  state.nutrition = { ...n, intake: [...n.intake.filter((x) => x.date !== date), rec].sort((a, b) => a.date.localeCompare(b.date)).slice(-180) };
+  saveNutrition();
+  emit();
+  return m;
+}
+export function removeMeal(id, date = today()) {
+  const n = state.nutrition;
+  const prev = n.intake.find((x) => x.date === date);
+  const m = prev?.meals?.find((x) => x.id === id);
+  if (!m) return;
+  const sub = (k) => Math.max(0, (Number(prev[k]) || 0) - (Number(m[k]) || 0));
+  const rec = { ...prev, kcal: sub("kcal"), protein: sub("protein"), carbs: sub("carbs"), fat: sub("fat"), meals: prev.meals.filter((x) => x.id !== id) };
+  state.nutrition = { ...n, intake: n.intake.map((x) => (x.date === date ? rec : x)) };
+  saveNutrition();
+  emit();
+}

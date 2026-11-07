@@ -1,6 +1,8 @@
 // Macros tab: daily targets, quick weight/food logging, the weight trend,
 // and the weekly check-in that adjusts the targets (engine/nutrition.js).
-import { state, today, nutritionView, setNutrition, logWeight, logIntake, runCheckIn } from "./store.js";
+import { state, today, nutritionView, setNutrition, logWeight, logIntake, runCheckIn, addMeal, removeMeal } from "./store.js";
+import { FOODS, CATEGORIES, groceryPlan } from "../engine/foods.js";
+import { estimateMeal, scaleMeal } from "./meals.js";
 import { GOALS, ACTIVITY, trend } from "../engine/nutrition.js";
 import { esc, sheet, closeSheet, toast, fmtDate } from "./dom.js";
 
@@ -25,7 +27,7 @@ export function renderNutrition(root) {
       <div class="label" style="margin-top:0"><i class="ti ti-flame" aria-hidden="true"></i> Today's targets</div>
       <div style="display:flex;align-items:baseline;gap:8px"><span class="num" style="font-size:44px;color:var(--silver)">${t.kcal.toLocaleString()}</span><span class="mut">calories</span></div>
       ${ate?.kcal ? `${bar(ate.kcal, t.kcal)}<div class="mut" style="font-size:13px;margin-top:4px">${ate.kcal.toLocaleString()} eaten · ${Math.max(0, t.kcal - ate.kcal).toLocaleString()} left</div>` : ""}
-      <div class="macros">${macro("Protein", t.protein, ate?.protein ?? null)}${macro("Carbs", t.carbs)}${macro("Fat", t.fat)}</div>
+      <div class="macros">${macro("Protein", t.protein, ate?.protein || ate?.meals?.length ? ate.protein ?? 0 : null)}${macro("Carbs", t.carbs, ate?.meals?.length ? ate.carbs ?? 0 : null)}${macro("Fat", t.fat, ate?.meals?.length ? ate.fat ?? 0 : null)}</div>
     </section>` : `<div class="notice warn">Log your weight to get your first targets.</div>`;
 
   const log = `<section class="card">
@@ -38,6 +40,21 @@ export function renderNutrition(root) {
       </form>
       <div class="mut" style="font-size:12px;margin-top:8px">Weigh in most mornings after the bathroom. Food is optional: log it and the targets get more accurate; skip it and they assume you hit them.</div>
     </section>`;
+
+  const meals = ate?.meals ?? [];
+  const mealCard = `<section class="card">
+      <div class="label" style="margin-top:0"><i class="ti ti-sparkles" aria-hidden="true"></i> Describe a meal</div>
+      <textarea id="nu-meal" rows="3" placeholder="e.g. Mom's chicken biryani, about 2 cups, with a bowl of raita and a mango lassi"></textarea>
+      <button class="primary" id="nu-est" style="height:44px;font-size:19px;margin:8px 0 0">Estimate macros</button>
+      <div class="mut" style="font-size:12px;margin-top:8px">For homemade or restaurant food without a label. Say roughly how much, and mention oil, butter, sauces and drinks if you know.</div>
+      ${meals.length ? `<div class="rows" style="margin-top:10px">${meals.map((m) => `<div class="row meal-row"><span>${esc(m.name)}<br><span class="mut" style="font-size:12px">${m.kcal} kcal · P${m.protein} C${m.carbs} F${m.fat}</span></span><button class="link" data-rm="${esc(m.id)}" aria-label="Remove ${esc(m.name)}"><i class="ti ti-x" aria-hidden="true"></i></button></div>`).join("")}</div>` : ""}
+    </section>`;
+
+  const groceryCard = t ? `<section class="card">
+      <div class="label" style="margin-top:0"><i class="ti ti-shopping-cart" aria-hidden="true"></i> Grocery list</div>
+      <p class="review-txt" style="margin:4px 0 8px">A week of macro-friendly staples sized to your ${t.kcal.toLocaleString()} kcal / ${t.protein} g protein target, plus a sample day.</p>
+      <button class="link" id="nu-groc" style="margin:0">Open this week's list</button>
+    </section>` : "";
 
   const tr = trend(state.weights, { until: today() }).slice(-42);
   const spark = tr.length >= 2 ? sparkline(tr) : "";
@@ -67,7 +84,7 @@ export function renderNutrition(root) {
     </div>
     <div class="mut" style="font-size:12px;margin:10px 16px 16px">Targets start from a resting-burn formula, then each week the app compares what you ate (or your targets, if you don't log) with what your weight trend did, works out what you really burn, and moves calories at most 250 at a time toward your goal rate. Never below your resting burn.</div>`;
 
-  root.innerHTML = `<header class="p-head"><h1>Macros</h1></header>${targets}${log}${trendCard}${checkCard}${settings}`;
+  root.innerHTML = `<header class="p-head"><h1>Macros</h1></header>${targets}${mealCard}${log}${groceryCard}${trendCard}${checkCard}${settings}`;
 
   root.querySelector("#nu-log").addEventListener("submit", (ev) => {
     ev.preventDefault();
@@ -77,6 +94,9 @@ export function renderNutrition(root) {
     if (k || p) { logIntake({ kcal: k || null, protein: p || null }); saved.push("food"); }
     toast(saved.length ? `Saved ${saved.join(" and ")}` : "Nothing to save");
   });
+  root.querySelector("#nu-est").addEventListener("click", () => estimate(root));
+  root.querySelectorAll("[data-rm]").forEach((b) => b.addEventListener("click", () => { removeMeal(b.dataset.rm); toast("Meal removed"); }));
+  root.querySelector("#nu-groc")?.addEventListener("click", () => grocerySheet(t));
   root.querySelector("#nu-check").addEventListener("click", () => { const c = runCheckIn({ force: true }); toast(c ? `Target: ${c.kcal.toLocaleString()} kcal` : "Log a weight first"); });
   root.querySelector("#nu-goal").addEventListener("click", goalSheet);
   root.querySelector("#nu-act").addEventListener("click", activitySheet);
@@ -185,4 +205,81 @@ function proteinSheet() {
   bindSegs(el);
   el.querySelector("#p-auto").addEventListener("click", () => { setNutrition({ proteinPerLb: null }); closeSheet(); toast("Saved"); });
   el.querySelector("#p-save").addEventListener("click", () => { setNutrition({ proteinPerLb: Number(segVal(el, "prot")) }); closeSheet(); toast("Saved"); });
+}
+
+// ---- AI meal estimate ----
+async function estimate(root) {
+  const ta = root.querySelector("#nu-meal"), btn = root.querySelector("#nu-est");
+  const text = ta.value.trim();
+  if (text.length < 3) return toast("Describe what you ate first");
+  btn.disabled = true; btn.textContent = "Estimating…";
+  try {
+    const m = await estimateMeal(text);
+    if (!m.items.length) throw new Error("Couldn't break that meal down");
+    mealSheet(m, () => { ta.value = ""; });
+  } catch (err) {
+    toast(err.message || "Estimate failed");
+  } finally {
+    btn.disabled = false; btn.textContent = "Estimate macros";
+  }
+}
+
+function mealSheet(base, onAdd) {
+  let k = 1;
+  const draw = (el) => {
+    const m = scaleMeal(base, k);
+    el.querySelector("#ms-body").innerHTML = `
+      <div class="rows">${m.items.map((it) => `<div class="row"><span>${esc(it.food)}<br><span class="mut" style="font-size:12px">${esc(it.amount)}</span></span><span class="r" style="text-align:right">${it.kcal} kcal<br><span class="mut" style="font-size:12px">P${it.protein} C${it.carbs} F${it.fat}</span></span></div>`).join("")}</div>
+      <div class="row" style="font-weight:600;margin-top:6px"><span>Total</span><span class="r">${m.kcal} kcal · P${m.protein} C${m.carbs} F${m.fat}</span></div>`;
+    return m;
+  };
+  const el = sheet(`<h2>${esc(base.name)}</h2>
+    ${base.assumptions ? `<p class="mut" style="font-size:13px;margin:0 0 6px">${esc(base.assumptions)}</p>` : ""}
+    <div class="mut" style="font-size:12px">Confidence: ${esc(base.confidence)}</div>
+    <div id="ms-body"></div>
+    <div class="label">How much did you have?</div>
+    <div class="seg" data-seg="portion">${[0.5, 1, 1.5, 2].map((x) => `<button type="button" data-v="${x}" aria-pressed="${x === 1}">${x}×</button>`).join("")}</div>
+    <button class="primary" id="ms-add">Add to today</button>
+    <button class="link" id="ms-cancel">Cancel</button>`);
+  draw(el);
+  el.querySelectorAll("[data-seg=portion] button").forEach((b) => b.addEventListener("click", () => {
+    el.querySelectorAll("[data-seg=portion] button").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+    k = Number(b.dataset.v); draw(el);
+  }));
+  el.querySelector("#ms-add").addEventListener("click", () => {
+    const m = scaleMeal(base, k);
+    addMeal(m);
+    closeSheet(); onAdd?.();
+    toast(`Added ${m.kcal} kcal`);
+  });
+  el.querySelector("#ms-cancel").addEventListener("click", closeSheet);
+}
+
+// ---- Grocery list ----
+const weekKey = () => { const d = new Date(today() + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7)); return `il4:grocery:${d.toISOString().slice(0, 10)}`; };
+const loadChecks = () => { try { return new Set(JSON.parse(localStorage.getItem(weekKey()) || "[]")); } catch { return new Set(); } };
+const saveChecks = (set) => { try { localStorage.setItem(weekKey(), JSON.stringify([...set])); } catch { /* ignore */ } };
+
+function grocerySheet(target) {
+  const plan = groceryPlan(target);
+  const checks = loadChecks();
+  const byCat = (list, fn) => Object.entries(CATEGORIES).map(([c, label]) => { const xs = list.filter((x) => x.cat === c); return xs.length ? `<div class="label">${esc(label)}</div>${xs.map(fn).join("")}` : ""; }).join("");
+  const weekHtml = byCat(plan.week, (x) => `<label class="groc-item"><input type="checkbox" data-g="${esc(x.id)}" ${checks.has(x.id) ? "checked" : ""}/><span>${esc(x.name)}</span><span class="mut">${x.amount != null ? `${x.amount}${/^\d/.test(x.unit) ? " ×" : ""} ${esc(x.unit)}` : `${x.servings} servings`}</span></label>`);
+  const meals = [...new Set(plan.day.map((x) => x.meal))];
+  const dayHtml = meals.map((m) => `<div class="label">${esc(m)}</div>${plan.day.filter((x) => x.meal === m).map((x) => `<div class="row"><span>${esc(x.name)}</span><span class="r mut">${x.n} × ${esc(x.serving)}</span></div>`).join("")}`).join("")
+    + `<div class="row" style="font-weight:600;margin-top:8px"><span>Day total</span><span class="r">${plan.totals.kcal} kcal · P${plan.totals.protein} C${plan.totals.carbs} F${plan.totals.fat}</span></div>
+       <div class="mut" style="font-size:12px;margin-top:4px">Target ${target.kcal} kcal · P${target.protein} C${target.carbs} F${target.fat}. Swap anything for something in the same group on the Foods tab.</div>`;
+  const foodsHtml = byCat(FOODS, (f) => `<div class="row food-row"><span>${esc(f.name)}<br><span class="mut" style="font-size:12px">${esc(f.serving)} · ${f.kcal} kcal · P${f.p} C${f.c} F${f.f}</span>${f.tip ? `<br><span class="mut" style="font-size:12px">${esc(f.tip)}</span>` : ""}</span></div>`);
+  const el = sheet(`<h2>Grocery list</h2>
+    <div class="seg" data-seg="gtab"><button type="button" data-v="week" aria-pressed="true">This week</button><button type="button" data-v="day">Sample day</button><button type="button" data-v="foods">Foods</button></div>
+    <div data-pane="week">${weekHtml}<div class="mut" style="font-size:12px;margin-top:10px">Ticks reset each Monday.</div></div>
+    <div data-pane="day" hidden>${dayHtml}</div>
+    <div data-pane="foods" hidden>${foodsHtml}</div>
+    <button class="link" id="g-close">Close</button>`);
+  el.querySelectorAll("[data-seg=gtab] button").forEach((b) => b.addEventListener("click", () => {
+    el.querySelectorAll("[data-seg=gtab] button").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+    el.querySelectorAll("[data-pane]").forEach((p) => { p.hidden = p.dataset.pane !== b.dataset.v; });
+  }));
+  el.querySelectorAll("[data-g]").forEach((c) => c.addEventListener("change", () => { c.checked ? checks.add(c.dataset.g) : checks.delete(c.dataset.g); saveChecks(checks); }));
+  el.querySelector("#g-close").addEventListener("click", closeSheet);
 }

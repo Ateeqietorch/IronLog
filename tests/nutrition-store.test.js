@@ -54,3 +54,24 @@ test("coach changes the goal through the engine, and undo restores it", async ()
   const n = await agent.runTool("get_nutrition", {}, sink);
   assert.equal(n.target.kcal, before);
 });
+
+test("meals add to the day and come back out; coach log_meal can be undone", async () => {
+  const before = { ...store.nutritionView().today };
+  const m = store.addMeal({ name: "Biryani", kcal: 700, protein: 35, carbs: 80, fat: 25, items: [{ food: "rice", amount: "2 cups", kcal: 700, protein: 35, carbs: 80, fat: 25 }] });
+  let t = store.nutritionView().today;
+  assert.equal(t.kcal, before.kcal + 700);
+  assert.equal(t.protein, before.protein + 35);
+  assert.equal(t.meals.length, 1);
+  store.removeMeal(m.id);
+  t = store.nutritionView().today;
+  assert.equal(t.kcal, before.kcal);
+  assert.equal(t.meals.length, 0);
+  const sink = { proposals: [], actions: [] };
+  const out = await agent.runTool("log_meal", { mode: "apply", name: "Dal and roti", items: [{ food: "dal", amount: "1 cup", kcal: 230, protein: 12, carbs: 30, fat: 7 }, { food: "roti", amount: "2", kcal: 240, protein: 8, carbs: 40, fat: 6 }] }, sink);
+  assert.match(out.logged, /470 kcal, P20/);
+  assert.equal(store.nutritionView().today.kcal, before.kcal + 470);
+  agent.undoAction(sink.actions[0]);
+  assert.equal(store.nutritionView().today.kcal, before.kcal);
+  const g = await agent.runTool("get_groceries", {}, sink);
+  assert.ok(g.week.some((x) => /Greek yogurt/i.test(x)), JSON.stringify(g.week));
+});
