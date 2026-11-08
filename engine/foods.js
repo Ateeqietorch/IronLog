@@ -158,9 +158,20 @@ export function foodMeal(f, servings = 1) {
 }
 
 // Label numbers typed in by hand (per serving × servings).
+export const kcalFromMacros = (p, c, f) => Math.round(4 * (Number(p) || 0) + 4 * (Number(c) || 0) + 9 * (Number(f) || 0));
+
+// Exact macros, no name needed: calories default to 4/4/9 when left blank.
+export function quickMeal({ protein = 0, carbs = 0, fat = 0, kcal = null, name = "" } = {}) {
+  const k = Number(kcal) > 0 ? Math.round(Number(kcal)) : kcalFromMacros(protein, carbs, fat);
+  if (!(k > 0)) return null;
+  const r = (x) => Math.max(0, Math.round(Number(x) || 0));
+  const item = { food: String(name ?? "").trim().slice(0, 80) || "Quick add", amount: "exact", kcal: k, protein: r(protein), carbs: r(carbs), fat: r(fat) };
+  return { name: item.food, items: [item], ...sumItems([item]), source: "quick" };
+}
+
 export function labelMeal({ name, kcal, protein = 0, carbs = 0, fat = 0, servings = 1 }) {
   const n = Math.max(0.25, Number(servings) || 1);
-  const k = Math.round((Number(kcal) || 0) * n);
+  const k = Math.round((Number(kcal) > 0 ? Number(kcal) : kcalFromMacros(protein, carbs, fat)) * n);
   if (!(k > 0) || !String(name ?? "").trim()) return null;
   const r = (x) => Math.max(0, Math.round((Number(x) || 0) * n));
   const item = { food: String(name).trim().slice(0, 80), amount: n === 1 ? "1 serving" : `${n} servings`, kcal: k, protein: r(protein), carbs: r(carbs), fat: r(fat) };

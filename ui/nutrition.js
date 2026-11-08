@@ -1,7 +1,7 @@
 // Macros tab: daily targets, quick weight/food logging, the weight trend,
 // and the weekly check-in that adjusts the targets (engine/nutrition.js).
 import { state, today, nutritionView, setNutrition, logWeight, logIntake, runCheckIn, addMeal, removeMeal, updateMealPortion, saveFood, unsaveFood, isSavedFood } from "./store.js";
-import { FOODS, CATEGORIES, groceryPlan, SNACK_SWAPS, food, foodMeal, labelMeal, recentMeals, searchFoods } from "../engine/foods.js";
+import { FOODS, CATEGORIES, groceryPlan, SNACK_SWAPS, food, foodMeal, labelMeal, quickMeal, kcalFromMacros, recentMeals, searchFoods } from "../engine/foods.js";
 import { estimateMeal, scaleMeal } from "./meals.js";
 import { GOALS, ACTIVITY, trend } from "../engine/nutrition.js";
 import { esc, sheet, closeSheet, toast, fmtDate } from "./dom.js";
@@ -54,13 +54,23 @@ export function renderNutrition(root) {
       <div class="label" style="margin-top:0;display:flex;align-items:center;justify-content:space-between"><span><i class="ti ti-tools-kitchen-2" aria-hidden="true"></i> Food log</span>
         <span class="day-nav"><button class="link" id="fl-prev" aria-label="Previous day" ${logDate <= addDays(today(), -30) ? "disabled" : ""}><i class="ti ti-chevron-left" aria-hidden="true"></i></button><span>${isToday ? "Today" : esc(fmtDate(logDate))}</span><button class="link" id="fl-next" aria-label="Next day" ${isToday ? "disabled" : ""}><i class="ti ti-chevron-right" aria-hidden="true"></i></button></span></div>
       <div class="mut" style="font-size:13px;margin-bottom:10px">${dayTot}</div>
-      <div class="fl-add">
+      <form id="fl-quick">
+        <div class="note-label" style="margin-top:0">Exact macros</div>
+        <div class="nu-grid fl-quick">
+          <label>Protein g<input id="q-p" inputmode="decimal" /></label>
+          <label>Carbs g<input id="q-c" inputmode="decimal" /></label>
+          <label>Fat g<input id="q-f" inputmode="decimal" /></label>
+          <label>Calories<input id="q-k" inputmode="numeric" placeholder="auto" /></label>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:8px"><input id="q-name" class="fs-q" style="margin:0;flex:1;height:44px" placeholder="Name (optional)" /><button class="primary" style="height:44px;width:auto;padding:0 18px;font-size:19px;margin:0">Add</button></div>
+      </form>
+      <div class="fl-add" style="margin-top:12px">
         <button class="secondary" id="fl-search"><i class="ti ti-search" aria-hidden="true"></i>Search foods</button>
         <button class="secondary" id="fl-label"><i class="ti ti-receipt" aria-hidden="true"></i>From a label</button>
       </div>
       <textarea id="nu-meal" rows="2" placeholder="Or describe it: Mom's chicken biryani, about 2 cups, with raita and a mango lassi"></textarea>
       <button class="primary" id="nu-est" style="height:44px;font-size:19px;margin:8px 0 0"><i class="ti ti-sparkles" aria-hidden="true"></i>Estimate macros</button>
-      ${meals.length ? `<div class="rows" style="margin-top:10px">${meals.map((m) => `<button class="list-btn meal-row" data-meal="${esc(m.id)}"><span>${esc(m.name)}${m.portion && m.portion !== 1 ? ` <span class="mut">${m.portion}×</span>` : ""}<br><span class="mut" style="font-size:12px">${m.kcal} kcal · P${m.protein} C${m.carbs} F${m.fat}</span></span><i class="ti ti-chevron-right" aria-hidden="true"></i></button>`).join("")}</div>` : `<div class="mut" style="font-size:12px;margin-top:8px">Search the food list or your saved foods, type numbers off a label, or describe homemade and restaurant food and the AI estimates it.</div>`}
+      ${meals.length ? `<div class="rows" style="margin-top:10px">${meals.map((m) => `<button class="list-btn meal-row" data-meal="${esc(m.id)}"><span>${esc(m.name)}${m.portion && m.portion !== 1 ? ` <span class="mut">${m.portion}×</span>` : ""}<br><span class="mut" style="font-size:12px">${m.kcal} kcal · P${m.protein} C${m.carbs} F${m.fat}</span></span><i class="ti ti-chevron-right" aria-hidden="true"></i></button>`).join("")}</div>` : `<div class="mut" style="font-size:12px;margin-top:8px">Know your numbers? Type them above. Otherwise search the food list, copy a label, or describe homemade and restaurant food for an AI estimate.</div>`}
     </section>`;
 
   const groceryCard = t ? `<section class="card">
@@ -111,6 +121,17 @@ export function renderNutrition(root) {
   root.querySelector("#fl-prev").addEventListener("click", () => { logDate = addDays(logDate, -1); renderNutrition(root); });
   root.querySelector("#fl-next").addEventListener("click", () => { logDate = addDays(logDate, 1); renderNutrition(root); });
   root.querySelector("#fl-search").addEventListener("click", searchSheet);
+  const qf = root.querySelector("#fl-quick");
+  const qv = (id) => qf.querySelector(id).value.trim();
+  const qAuto = () => { const k = kcalFromMacros(qv("#q-p"), qv("#q-c"), qv("#q-f")); qf.querySelector("#q-k").placeholder = k > 0 ? String(k) : "auto"; };
+  ["#q-p", "#q-c", "#q-f"].forEach((id) => qf.querySelector(id).addEventListener("input", qAuto));
+  qf.addEventListener("submit", (ev) => {
+    ev.preventDefault();
+    const m = quickMeal({ protein: qv("#q-p"), carbs: qv("#q-c"), fat: qv("#q-f"), kcal: qv("#q-k"), name: qv("#q-name") });
+    if (!m) return toast("Enter protein, carbs or fat");
+    addMeal(m, logDate);
+    toast(`Added ${m.kcal} kcal · P${m.protein} C${m.carbs} F${m.fat}`);
+  });
   root.querySelector("#fl-label").addEventListener("click", labelSheet);
   root.querySelectorAll("[data-meal]").forEach((b) => b.addEventListener("click", () => loggedSheet(b.dataset.meal)));
   root.querySelector("#nu-groc")?.addEventListener("click", () => grocerySheet(t));
@@ -362,7 +383,7 @@ function labelSheet() {
     <div class="nu-grid"><label style="grid-column:1/-1">Food<input id="lb-name" placeholder="e.g. Quest bar, cookies & cream" /></label></div>
     <div class="note-label">Per serving, as printed</div>
     <div class="nu-grid">
-      <label>Calories<input id="lb-k" inputmode="numeric" /></label>
+      <label>Calories<input id="lb-k" inputmode="numeric" placeholder="auto" /></label>
       <label>Protein g<input id="lb-p" inputmode="decimal" /></label>
       <label>Carbs g<input id="lb-c" inputmode="decimal" /></label>
       <label>Fat g<input id="lb-f" inputmode="decimal" /></label>
@@ -375,7 +396,7 @@ function labelSheet() {
   el.querySelector("#lb-add").addEventListener("click", () => {
     const servings = Number(v("#lb-n")) || 1;
     const m = labelMeal({ name: v("#lb-name"), kcal: v("#lb-k"), protein: v("#lb-p"), carbs: v("#lb-c"), fat: v("#lb-f"), servings });
-    if (!m) return toast("Add a name and calories");
+    if (!m) return toast("Add a name and some macros");
     addMeal(m, logDate);
     if (el.querySelector("#lb-save").checked) saveFood(labelMeal({ name: v("#lb-name"), kcal: v("#lb-k"), protein: v("#lb-p"), carbs: v("#lb-c"), fat: v("#lb-f") }));
     closeSheet();

@@ -271,3 +271,5 @@ body:not([data-tab="train"]) .app.resting { padding-bottom: calc(68px + env(safe
 .fl-add { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
 .fl-add button { margin: 0; height: 44px; font-size: 15px; }
 .fs-q { width: 100%; box-sizing: border-box; height: 46px; border-radius: var(--r-control); border: 1px solid var(--seam); background: var(--plate-deep); color: var(--silver); font-size: 17px; padding: 0 12px; margin: 4px 0 8px; }
+.nu-grid.fl-quick { grid-template-columns: repeat(4, 1fr); }
+.nu-grid.fl-quick input { font-size: 17px; padding: 0 8px; }

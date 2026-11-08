@@ -79,3 +79,12 @@ test("my foods: save replaces same name, unsave removes, backed up to the sheet"
   store.unsaveFood(store.state.nutrition.saved[0].id);
   assert.equal(store.state.nutrition.saved.length, 0);
 });
+
+test("exact macros: calories from 4/4/9 unless given; name optional", async () => {
+  const { quickMeal } = await import("../engine/foods.js");
+  const m = quickMeal({ protein: 60, carbs: 25, fat: 7 });
+  assert.deepEqual([m.name, m.kcal, m.protein, m.carbs, m.fat], ["Quick add", 403, 60, 25, 7]);
+  assert.equal(quickMeal({ protein: 60, carbs: 25, fat: 7, kcal: 410, name: "Lunch" }).kcal, 410);
+  assert.equal(quickMeal({}), null);
+  assert.equal(labelMeal({ name: "Bar", protein: 20, carbs: 20, fat: 10 }).kcal, 250);
+});
