@@ -10,6 +10,7 @@ import { mesoWeek } from "../engine/meso.js";
 import { tables } from "../data/sheets.js";
 import { readLog, readBodyweightHistory, writeBodyweight, writeSession, dedupeLog, rowToObject, objectToRow } from "../data/log.js";
 import { checkIn, checkInDue, cleanWeights, summary as nutritionSummary } from "../engine/nutrition.js";
+import { sumItems } from "../engine/foods.js";
 import { loadProgram, replaceSlot, updateSlot, insertSlot, saveProgramStorage, readProgramStorage } from "../data/program.js";
 import { newTrial, applyTrials, recordSession, resolveTrial } from "../data/trials.js";
 import { buildSession, toRows, applyChanges, planOne } from "./session.js";
@@ -41,7 +42,7 @@ export const state = {
   normSets: [], feedback: [], directives: [], plan: null,
   // Nutrition (engine/nutrition.js): profile + goal, weekly check-ins,
   // optional daily intake, and every weigh-in.
-  nutrition: { profile: null, goal: null, proteinPerLb: null, checkins: [], intake: [] }, weights: [],
+  nutrition: { profile: null, goal: null, proteinPerLb: null, checkins: [], intake: [], saved: [] }, weights: [],
 };
 
 export function emit() { for (const f of state.listeners) f(state); }
@@ -657,6 +658,7 @@ function saveNutrition() {
     { key: "settings", value: { profile: n.profile, goal: n.goal, proteinPerLb: n.proteinPerLb } },
     { key: "checkins", value: { list: n.checkins.slice(-60) } },
     { key: "intake", value: { list: n.intake.slice(-120) } },
+    { key: "saved", value: { list: (n.saved ?? []).slice(0, 200) } },
   ]).catch(() => {});
 }
 
@@ -667,7 +669,7 @@ export async function syncNutrition() {
     const by = Object.fromEntries(recs.map((r) => [r.key, r.value]));
     const n = state.nutrition;
     if (!n.profile && by.settings?.profile) {
-      state.nutrition = { ...n, ...by.settings, checkins: by.checkins?.list ?? [], intake: by.intake?.list ?? [] };
+      state.nutrition = { ...n, ...by.settings, checkins: by.checkins?.list ?? [], intake: by.intake?.list ?? [], saved: by.saved?.list ?? [] };
       ls.set(K.nutrition, state.nutrition);
       emit();
     } else if (n.profile) saveNutrition();
@@ -754,7 +756,7 @@ let mealSeq = 0;
 export function addMeal(meal, date = today()) {
   const n = state.nutrition;
   const prev = n.intake.find((x) => x.date === date) ?? { date };
-  const m = { id: `m${Date.now().toString(36)}${(mealSeq++).toString(36)}`, name: meal.name, kcal: meal.kcal, protein: meal.protein, carbs: meal.carbs, fat: meal.fat, items: meal.items ?? [], source: meal.source ?? "ai", ...(meal.text ? { text: meal.text } : {}) };
+  const m = { id: `m${Date.now().toString(36)}${(mealSeq++).toString(36)}`, name: meal.name, kcal: meal.kcal, protein: meal.protein, carbs: meal.carbs, fat: meal.fat, items: meal.items ?? [], source: meal.source ?? "ai", ...(meal.text ? { text: meal.text } : {}), ...(meal.foodId ? { foodId: meal.foodId } : {}), ...(meal.base ? { base: meal.base, portion: meal.portion } : {}) };
   const add = (k) => (Number(prev[k]) || 0) + (Number(m[k]) || 0);
   const rec = { ...prev, kcal: add("kcal"), protein: add("protein"), carbs: add("carbs"), fat: add("fat"), meals: [...(prev.meals ?? []), m] };
   state.nutrition = { ...n, intake: [...n.intake.filter((x) => x.date !== date), rec].sort((a, b) => a.date.localeCompare(b.date)).slice(-180) };
@@ -773,3 +775,40 @@ export function removeMeal(id, date = today()) {
   saveNutrition();
   emit();
 }
+
+// Change a logged meal's portion: k is relative to how it was first logged.
+export function updateMealPortion(id, k, date = today()) {
+  const n = state.nutrition;
+  const prev = n.intake.find((x) => x.date === date);
+  const m = prev?.meals?.find((x) => x.id === id);
+  if (!m || !(k > 0)) return null;
+  const base = m.base ?? { items: m.items, kcal: m.kcal, protein: m.protein, carbs: m.carbs, fat: m.fat };
+  const items = (base.items ?? []).map((it) => ({ ...it, kcal: Math.round(it.kcal * k), protein: Math.round(it.protein * k), carbs: Math.round(it.carbs * k), fat: Math.round(it.fat * k) }));
+  const tot = items.length ? sumItems(items) : { kcal: Math.round(base.kcal * k), protein: Math.round(base.protein * k), carbs: Math.round(base.carbs * k), fat: Math.round(base.fat * k) };
+  const next = { ...m, items, ...tot, base, portion: k };
+  const d = (key) => Math.max(0, (Number(prev[key]) || 0) - (Number(m[key]) || 0) + (Number(next[key]) || 0));
+  const rec = { ...prev, kcal: d("kcal"), protein: d("protein"), carbs: d("carbs"), fat: d("fat"), meals: prev.meals.map((x) => (x.id === id ? next : x)) };
+  state.nutrition = { ...n, intake: n.intake.map((x) => (x.date === date ? rec : x)) };
+  saveNutrition();
+  emit();
+  return next;
+}
+
+// "My foods": meals saved for one-tap logging (go-to breakfast, a shake, a
+// label you've typed once). Same name replaces.
+export function saveFood(meal) {
+  const n = state.nutrition;
+  const f = { id: `f${Date.now().toString(36)}${(mealSeq++).toString(36)}`, name: String(meal.name).slice(0, 80), kcal: meal.kcal, protein: meal.protein, carbs: meal.carbs, fat: meal.fat, items: meal.items ?? [] };
+  const key = f.name.trim().toLowerCase();
+  state.nutrition = { ...n, saved: [f, ...(n.saved ?? []).filter((x) => x.name.trim().toLowerCase() !== key)] };
+  saveNutrition();
+  emit();
+  return f;
+}
+export function unsaveFood(id) {
+  const n = state.nutrition;
+  state.nutrition = { ...n, saved: (n.saved ?? []).filter((x) => x.id !== id) };
+  saveNutrition();
+  emit();
+}
+export const isSavedFood = (name) => (state.nutrition.saved ?? []).some((x) => x.name.trim().toLowerCase() === String(name).trim().toLowerCase());

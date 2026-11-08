@@ -1,12 +1,15 @@
 // Macros tab: daily targets, quick weight/food logging, the weight trend,
 // and the weekly check-in that adjusts the targets (engine/nutrition.js).
-import { state, today, nutritionView, setNutrition, logWeight, logIntake, runCheckIn, addMeal, removeMeal } from "./store.js";
-import { FOODS, CATEGORIES, groceryPlan, SNACK_SWAPS, food } from "../engine/foods.js";
+import { state, today, nutritionView, setNutrition, logWeight, logIntake, runCheckIn, addMeal, removeMeal, updateMealPortion, saveFood, unsaveFood, isSavedFood } from "./store.js";
+import { FOODS, CATEGORIES, groceryPlan, SNACK_SWAPS, food, foodMeal, labelMeal, recentMeals, searchFoods } from "../engine/foods.js";
 import { estimateMeal, scaleMeal } from "./meals.js";
 import { GOALS, ACTIVITY, trend } from "../engine/nutrition.js";
 import { esc, sheet, closeSheet, toast, fmtDate } from "./dom.js";
 
 const r1 = (x) => Math.round(x * 10) / 10;
+let logDate = today();
+const addDays = (iso, k) => { const d = new Date(iso + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() + k); return d.toISOString().slice(0, 10); };
+const dayWord = () => (logDate === today() ? "today" : fmtDate(logDate));
 const signed = (x) => `${x > 0 ? "+" : x < 0 ? "−" : ""}${Math.abs(r1(x))}`;
 const goalText = (g) => {
   if (!g) return "—";
@@ -41,13 +44,23 @@ export function renderNutrition(root) {
       <div class="mut" style="font-size:12px;margin-top:8px">Weigh in most mornings after the bathroom. Food is optional: log it and the targets get more accurate; skip it and they assume you hit them.</div>
     </section>`;
 
-  const meals = ate?.meals ?? [];
+  // Food log: any of the last 30 days, today by default.
+  if (logDate > today()) logDate = today();
+  const isToday = logDate === today();
+  const day = n.intake.find((x) => x.date === logDate) ?? null;
+  const meals = day?.meals ?? [];
+  const dayTot = day && (day.kcal || meals.length) ? `${(day.kcal ?? 0).toLocaleString()} kcal · P${day.protein ?? 0} C${day.carbs ?? 0} F${day.fat ?? 0}` : "Nothing logged";
   const mealCard = `<section class="card">
-      <div class="label" style="margin-top:0"><i class="ti ti-sparkles" aria-hidden="true"></i> Describe a meal</div>
-      <textarea id="nu-meal" rows="3" placeholder="e.g. Mom's chicken biryani, about 2 cups, with a bowl of raita and a mango lassi"></textarea>
-      <button class="primary" id="nu-est" style="height:44px;font-size:19px;margin:8px 0 0">Estimate macros</button>
-      <div class="mut" style="font-size:12px;margin-top:8px">For homemade or restaurant food without a label. Say roughly how much, and mention oil, butter, sauces and drinks if you know.</div>
-      ${meals.length ? `<div class="rows" style="margin-top:10px">${meals.map((m) => `<div class="row meal-row"><span>${esc(m.name)}<br><span class="mut" style="font-size:12px">${m.kcal} kcal · P${m.protein} C${m.carbs} F${m.fat}</span></span><button class="link" data-rm="${esc(m.id)}" aria-label="Remove ${esc(m.name)}"><i class="ti ti-x" aria-hidden="true"></i></button></div>`).join("")}</div>` : ""}
+      <div class="label" style="margin-top:0;display:flex;align-items:center;justify-content:space-between"><span><i class="ti ti-tools-kitchen-2" aria-hidden="true"></i> Food log</span>
+        <span class="day-nav"><button class="link" id="fl-prev" aria-label="Previous day" ${logDate <= addDays(today(), -30) ? "disabled" : ""}><i class="ti ti-chevron-left" aria-hidden="true"></i></button><span>${isToday ? "Today" : esc(fmtDate(logDate))}</span><button class="link" id="fl-next" aria-label="Next day" ${isToday ? "disabled" : ""}><i class="ti ti-chevron-right" aria-hidden="true"></i></button></span></div>
+      <div class="mut" style="font-size:13px;margin-bottom:10px">${dayTot}</div>
+      <div class="fl-add">
+        <button class="secondary" id="fl-search"><i class="ti ti-search" aria-hidden="true"></i>Search foods</button>
+        <button class="secondary" id="fl-label"><i class="ti ti-receipt" aria-hidden="true"></i>From a label</button>
+      </div>
+      <textarea id="nu-meal" rows="2" placeholder="Or describe it: Mom's chicken biryani, about 2 cups, with raita and a mango lassi"></textarea>
+      <button class="primary" id="nu-est" style="height:44px;font-size:19px;margin:8px 0 0"><i class="ti ti-sparkles" aria-hidden="true"></i>Estimate macros</button>
+      ${meals.length ? `<div class="rows" style="margin-top:10px">${meals.map((m) => `<button class="list-btn meal-row" data-meal="${esc(m.id)}"><span>${esc(m.name)}${m.portion && m.portion !== 1 ? ` <span class="mut">${m.portion}×</span>` : ""}<br><span class="mut" style="font-size:12px">${m.kcal} kcal · P${m.protein} C${m.carbs} F${m.fat}</span></span><i class="ti ti-chevron-right" aria-hidden="true"></i></button>`).join("")}</div>` : `<div class="mut" style="font-size:12px;margin-top:8px">Search the food list or your saved foods, type numbers off a label, or describe homemade and restaurant food and the AI estimates it.</div>`}
     </section>`;
 
   const groceryCard = t ? `<section class="card">
@@ -95,7 +108,11 @@ export function renderNutrition(root) {
     toast(saved.length ? `Saved ${saved.join(" and ")}` : "Nothing to save");
   });
   root.querySelector("#nu-est").addEventListener("click", () => estimate(root));
-  root.querySelectorAll("[data-rm]").forEach((b) => b.addEventListener("click", () => { removeMeal(b.dataset.rm); toast("Meal removed"); }));
+  root.querySelector("#fl-prev").addEventListener("click", () => { logDate = addDays(logDate, -1); renderNutrition(root); });
+  root.querySelector("#fl-next").addEventListener("click", () => { logDate = addDays(logDate, 1); renderNutrition(root); });
+  root.querySelector("#fl-search").addEventListener("click", searchSheet);
+  root.querySelector("#fl-label").addEventListener("click", labelSheet);
+  root.querySelectorAll("[data-meal]").forEach((b) => b.addEventListener("click", () => loggedSheet(b.dataset.meal)));
   root.querySelector("#nu-groc")?.addEventListener("click", () => grocerySheet(t));
   root.querySelector("#nu-check").addEventListener("click", () => { const c = runCheckIn({ force: true }); toast(c ? `Target: ${c.kcal.toLocaleString()} kcal` : "Log a weight first"); });
   root.querySelector("#nu-goal").addEventListener("click", goalSheet);
@@ -239,7 +256,8 @@ function mealSheet(base, onAdd) {
     <div id="ms-body"></div>
     <div class="label">How much did you have?</div>
     <div class="seg" data-seg="portion">${[0.5, 1, 1.5, 2].map((x) => `<button type="button" data-v="${x}" aria-pressed="${x === 1}">${x}×</button>`).join("")}</div>
-    <button class="primary" id="ms-add">Add to today</button>
+    <label class="groc-item" style="border:0"><input type="checkbox" id="ms-save"/><span>Save to my foods</span></label>
+    <button class="primary" id="ms-add">Add to ${esc(dayWord())}</button>
     <button class="link" id="ms-cancel">Cancel</button>`);
   draw(el);
   el.querySelectorAll("[data-seg=portion] button").forEach((b) => b.addEventListener("click", () => {
@@ -248,7 +266,8 @@ function mealSheet(base, onAdd) {
   }));
   el.querySelector("#ms-add").addEventListener("click", () => {
     const m = scaleMeal(base, k);
-    addMeal(m);
+    addMeal(m, logDate);
+    if (el.querySelector("#ms-save").checked) saveFood(base);
     closeSheet(); onAdd?.();
     toast(`Added ${m.kcal} kcal`);
   });
@@ -282,4 +301,127 @@ function grocerySheet(target) {
   }));
   el.querySelectorAll("[data-g]").forEach((c) => c.addEventListener("change", () => { c.checked ? checks.add(c.dataset.g) : checks.delete(c.dataset.g); saveChecks(checks); }));
   el.querySelector("#g-close").addEventListener("click", closeSheet);
+}
+
+
+// ---- Food log sheets ----
+const macroLine = (m) => `${m.kcal} kcal · P${m.protein} C${m.carbs} F${m.fat}`;
+
+// Search saved foods, recent meals and the food list; tap one to set servings.
+function searchSheet() {
+  const n = state.nutrition;
+  const recent = recentMeals(n.intake, { limit: 15 });
+  const el = sheet(`<h2>Add food</h2>
+    <input id="fs-q" type="search" class="fs-q" placeholder="Search: yogurt, chicken, my shake…" autocomplete="off" />
+    <div id="fs-res"></div>
+    <button class="link" id="fs-close">Close</button>`);
+  const tag = { saved: "My food", recent: "Recent", library: "" };
+  const draw = () => {
+    const q = el.querySelector("#fs-q").value;
+    const res = searchFoods(q, { saved: n.saved ?? [], recent, library: FOODS }).slice(0, 40);
+    el.querySelector("#fs-res").innerHTML = res.length
+      ? `<div class="rows">${res.map((x, i) => `<button class="list-btn" data-i="${i}"><span>${esc(x.name)}<br><span class="mut" style="font-size:12px">${x.kind === "library" ? `${esc(x.serving)} · ${x.kcal} kcal · P${x.p} C${x.c} F${x.f}` : `${macroLine(x)}${tag[x.kind] ? ` · ${tag[x.kind]}` : ""}`}</span></span><i class="ti ti-plus" aria-hidden="true"></i></button>`).join("")}</div>`
+      : `<div class="mut" style="font-size:13px;margin:10px 2px">${q.trim() ? "No match. Use “From a label” or describe it for an AI estimate." : "Your saved foods and recent meals show up here. Type to search the food list."}</div>`;
+    el.querySelectorAll("[data-i]").forEach((b) => b.addEventListener("click", () => servingsSheet(res[Number(b.dataset.i)])));
+  };
+  el.querySelector("#fs-q").addEventListener("input", draw);
+  el.querySelector("#fs-close").addEventListener("click", closeSheet);
+  draw();
+}
+
+function servingsSheet(x) {
+  let k = 1;
+  const make = () => (x.kind === "library" ? foodMeal(x, k) : { ...scaleMeal({ ...x, items: x.items?.length ? x.items : [{ food: x.name, amount: "1 serving", kcal: x.kcal, protein: x.protein, carbs: x.carbs, fat: x.fat }] }, k), name: x.name, source: x.kind === "saved" ? "saved" : (x.source ?? "food") });
+  const el = sheet(`<h2>${esc(x.name)}</h2>
+    <div class="mut" style="font-size:13px">${x.kind === "library" ? `Serving: ${esc(x.serving)}` : "Servings are relative to how you saved or last logged it."}</div>
+    <div class="stepper" style="margin-top:12px"><span class="lbl">Servings</span><span class="ctl"><button type="button" id="sv-dn" aria-label="Fewer"><i class="ti ti-minus" aria-hidden="true"></i></button><input id="sv-n" inputmode="decimal" value="1" aria-label="Servings"/><button type="button" id="sv-up" aria-label="More"><i class="ti ti-plus" aria-hidden="true"></i></button></span></div>
+    <div class="row" style="font-weight:600"><span>Total</span><span class="r" id="sv-tot"></span></div>
+    ${x.kind !== "saved" ? `<label class="groc-item" style="border:0"><input type="checkbox" id="sv-save"/><span>Save to my foods</span></label>` : ""}
+    <button class="primary" id="sv-add">Add to ${esc(dayWord())}</button>
+    <button class="link" id="sv-back">Back</button>`);
+  const inp = el.querySelector("#sv-n");
+  const draw = () => { el.querySelector("#sv-tot").textContent = macroLine(make()); };
+  const set = (v) => { k = Math.max(0.25, Math.min(20, Math.round(v * 4) / 4)); inp.value = k; draw(); };
+  el.querySelector("#sv-dn").addEventListener("click", () => set(k - 0.5));
+  el.querySelector("#sv-up").addEventListener("click", () => set(k + 0.5));
+  inp.addEventListener("input", () => { const v = Number(inp.value); if (v > 0) { k = v; draw(); } });
+  el.querySelector("#sv-add").addEventListener("click", () => {
+    const m = make();
+    addMeal(m, logDate);
+    if (el.querySelector("#sv-save")?.checked) saveFood({ ...m, ...(k !== 1 ? { name: `${m.name} (${k}×)` } : {}) });
+    closeSheet();
+    toast(`Added ${m.kcal} kcal`);
+  });
+  el.querySelector("#sv-back").addEventListener("click", searchSheet);
+  draw();
+}
+
+// Packaged food: copy the label (per serving), say how many servings.
+function labelSheet() {
+  const el = sheet(`<h2>From a label</h2>
+    <div class="nu-grid"><label style="grid-column:1/-1">Food<input id="lb-name" placeholder="e.g. Quest bar, cookies & cream" /></label></div>
+    <div class="note-label">Per serving, as printed</div>
+    <div class="nu-grid">
+      <label>Calories<input id="lb-k" inputmode="numeric" /></label>
+      <label>Protein g<input id="lb-p" inputmode="decimal" /></label>
+      <label>Carbs g<input id="lb-c" inputmode="decimal" /></label>
+      <label>Fat g<input id="lb-f" inputmode="decimal" /></label>
+      <label>Servings eaten<input id="lb-n" inputmode="decimal" value="1" /></label>
+    </div>
+    <label class="groc-item" style="border:0"><input type="checkbox" id="lb-save" checked/><span>Save to my foods</span></label>
+    <button class="primary" id="lb-add">Add to ${esc(dayWord())}</button>
+    <button class="link" id="lb-cancel">Cancel</button>`);
+  const v = (id) => el.querySelector(id).value.trim();
+  el.querySelector("#lb-add").addEventListener("click", () => {
+    const servings = Number(v("#lb-n")) || 1;
+    const m = labelMeal({ name: v("#lb-name"), kcal: v("#lb-k"), protein: v("#lb-p"), carbs: v("#lb-c"), fat: v("#lb-f"), servings });
+    if (!m) return toast("Add a name and calories");
+    addMeal(m, logDate);
+    if (el.querySelector("#lb-save").checked) saveFood(labelMeal({ name: v("#lb-name"), kcal: v("#lb-k"), protein: v("#lb-p"), carbs: v("#lb-c"), fat: v("#lb-f") }));
+    closeSheet();
+    toast(`Added ${m.kcal} kcal`);
+  });
+  el.querySelector("#lb-cancel").addEventListener("click", closeSheet);
+}
+
+// A logged meal: change the portion, save it, log it again, or delete it.
+function loggedSheet(id) {
+  const date = logDate;
+  const m = state.nutrition.intake.find((x) => x.date === date)?.meals?.find((x) => x.id === id);
+  if (!m) return;
+  const cur = m.portion ?? 1;
+  const saved = isSavedFood(m.name);
+  const opts = [0.5, 0.75, 1, 1.5, 2];
+  const el = sheet(`<h2>${esc(m.name)}</h2>
+    <div class="mut" style="font-size:13px">${macroLine(m)}${m.text ? `<br>“${esc(m.text)}”` : ""}</div>
+    ${m.items?.length > 1 ? `<div class="rows" style="margin-top:8px">${m.items.map((it) => `<div class="row"><span>${esc(it.food)}<br><span class="mut" style="font-size:12px">${esc(it.amount)}</span></span><span class="r mut" style="font-size:12px;text-align:right">${it.kcal} kcal<br>P${it.protein} C${it.carbs} F${it.fat}</span></div>`).join("")}</div>` : ""}
+    <div class="label">Portion</div>
+    <div class="seg" data-seg="lp">${opts.map((o) => `<button type="button" data-v="${o}" aria-pressed="${o === cur}">${o}×</button>`).join("")}</div>
+    <div class="rows">
+      <button class="list-btn" id="lm-save"><span>${saved ? "Remove from my foods" : "Save to my foods"}</span><i class="ti ti-${saved ? "star-off" : "star"}" aria-hidden="true"></i></button>
+      <button class="list-btn" id="lm-again"><span>Log again ${date === today() ? "" : "today"}</span><i class="ti ti-copy" aria-hidden="true"></i></button>
+      <button class="list-btn" id="lm-del" style="color:var(--red)"><span>Delete</span><i class="ti ti-trash" aria-hidden="true"></i></button>
+    </div>
+    <button class="link" id="lm-close">Done</button>`);
+  el.querySelectorAll("[data-seg=lp] button").forEach((b) => b.addEventListener("click", () => {
+    el.querySelectorAll("[data-seg=lp] button").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+    const next = updateMealPortion(id, Number(b.dataset.v), date);
+    if (next) el.querySelector(".mut").innerHTML = `${macroLine(next)}${m.text ? `<br>“${esc(m.text)}”` : ""}`;
+  }));
+  el.querySelector("#lm-save").addEventListener("click", () => {
+    if (saved) { const f = state.nutrition.saved.find((x) => x.name.trim().toLowerCase() === m.name.trim().toLowerCase()); if (f) unsaveFood(f.id); toast("Removed from my foods"); }
+    else { saveFood(m); toast("Saved to my foods"); }
+    closeSheet();
+  });
+  el.querySelector("#lm-again").addEventListener("click", () => {
+    const cur2 = state.nutrition.intake.find((x) => x.date === date)?.meals?.find((x) => x.id === id) ?? m;
+    addMeal({ ...cur2, source: cur2.source }, today());
+    closeSheet(); toast(`Logged again: ${cur2.kcal} kcal`);
+  });
+  el.querySelector("#lm-del").addEventListener("click", () => {
+    const keep = state.nutrition.intake.find((x) => x.date === date)?.meals?.find((x) => x.id === id) ?? m;
+    removeMeal(id, date); closeSheet();
+    toast("Meal deleted", { label: "Undo", fn: () => addMeal(keep, date) });
+  });
+  el.querySelector("#lm-close").addEventListener("click", closeSheet);
 }

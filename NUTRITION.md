@@ -31,3 +31,12 @@ The coach can do the same from chat ("log the biryani I just had"): the `log_mea
 
 ### Branded snacks
 The plan includes one Goldfish 100-calorie pouch a day. "Snack picks to rotate in" lists branded snacks (Oikos Pro, Core Power, Premier Protein, Chomps, Mini Babybel Light, Rice Krispies Treats), each with the plan item it replaces so the day still adds up. The numbers come from the product labels (checked Nov 2026); they vary a little by flavor.
+
+## Food log
+The Food log card on the Macros tab logs to today or any of the last 30 days (‹ › to switch). Four ways in:
+- **Search foods:** your saved foods and recent meals first, then the built-in food list (`engine/foods.js`). Pick servings in 0.5 steps.
+- **From a label:** type the per-serving numbers and how many servings you ate. Saved to My foods by default.
+- **Describe it:** the AI estimate, as before.
+- **Tap a logged meal** to change its portion (0.5–2×, relative to how it was first logged), save it to My foods, log it again today, or delete it (with undo).
+
+My foods live in `state.nutrition.saved` and back up to the Nutrition sheet under the `saved` key. Day totals feed the weekly check-in the same way as before (7+ logged days in 14 → it uses your logs).

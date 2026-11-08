@@ -146,3 +146,49 @@ export const SNACK_SWAPS = Object.freeze([
   ["oikos-pro", "a scoop of whey or the yogurt bowl"], ["core-power", "a scoop of whey"], ["premier-protein", "a scoop of whey"],
   ["chomps", "2 eggs"], ["babybel-light", "1 egg"], ["rice-krispies-treat", "the Goldfish pouch, pre-workout"],
 ]);
+
+// ── Food log helpers (pure) ─────────────────────────────────────────────────
+// A library food at N servings, as a meal the store can log.
+export function foodMeal(f, servings = 1) {
+  const n = Math.max(0.25, Number(servings) || 1);
+  const r = (x) => Math.round((Number(x) || 0) * n);
+  const amount = `${n === 1 ? "" : `${n} × `}${f.serving}`;
+  const item = { food: f.name, amount, kcal: r(f.kcal), protein: r(f.p), carbs: r(f.c), fat: r(f.f) };
+  return { name: f.name, items: [item], ...sumItems([item]), source: "food", foodId: f.id, servings: n };
+}
+
+// Label numbers typed in by hand (per serving × servings).
+export function labelMeal({ name, kcal, protein = 0, carbs = 0, fat = 0, servings = 1 }) {
+  const n = Math.max(0.25, Number(servings) || 1);
+  const k = Math.round((Number(kcal) || 0) * n);
+  if (!(k > 0) || !String(name ?? "").trim()) return null;
+  const r = (x) => Math.max(0, Math.round((Number(x) || 0) * n));
+  const item = { food: String(name).trim().slice(0, 80), amount: n === 1 ? "1 serving" : `${n} servings`, kcal: k, protein: r(protein), carbs: r(carbs), fat: r(fat) };
+  return { name: item.food, items: [item], ...sumItems([item]), source: "label", servings: n };
+}
+
+// Distinct meals logged recently (newest first), for one-tap re-logging.
+export function recentMeals(intake = [], { limit = 12 } = {}) {
+  const seen = new Set(), out = [];
+  for (const day of [...intake].sort((a, b) => b.date.localeCompare(a.date))) {
+    for (const m of [...(day.meals ?? [])].reverse()) {
+      const key = m.name.trim().toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key); out.push({ ...m, lastDate: day.date });
+      if (out.length >= limit) return out;
+    }
+  }
+  return out;
+}
+
+// Search: every word must appear in the name. Saved foods and recents first,
+// then the library. Empty query → saved + recents.
+export function searchFoods(q, { saved = [], recent = [], library = FOODS } = {}) {
+  const words = String(q ?? "").toLowerCase().split(/\s+/).filter(Boolean);
+  const hit = (name) => words.every((w) => name.toLowerCase().includes(w));
+  const names = new Set();
+  const take = (kind) => (x) => { const k = x.name.toLowerCase(); if (names.has(k)) return null; names.add(k); return { kind, ...x }; };
+  const pick = (xs, kind) => xs.filter((x) => !words.length || hit(x.name)).map(take(kind)).filter(Boolean);
+  const mine = [...pick(saved, "saved"), ...pick(recent, "recent")];
+  return words.length ? [...mine, ...pick(library.filter((f) => f.cat !== "free"), "library")] : mine;
+}

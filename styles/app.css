@@ -264,3 +264,10 @@ body:not([data-tab="train"]) .app.resting { padding-bottom: calc(68px + env(safe
 .groc-item span:nth-child(2) { flex: 1; }
 .groc-item input { width: 20px; height: 20px; accent-color: var(--red); }
 .groc-item input:checked + span { text-decoration: line-through; opacity: .55; }
+/* Food log */
+.day-nav { display: inline-flex; align-items: center; gap: 2px; font-size: 13px; color: var(--silver); text-transform: none; letter-spacing: 0; }
+.day-nav button { width: 36px; height: 36px; margin: 0; display: grid; place-items: center; }
+.day-nav button:disabled { opacity: .3; }
+.fl-add { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
+.fl-add button { margin: 0; height: 44px; font-size: 15px; }
+.fs-q { width: 100%; box-sizing: border-box; height: 46px; border-radius: var(--r-control); border: 1px solid var(--seam); background: var(--plate-deep); color: var(--silver); font-size: 17px; padding: 0 12px; margin: 4px 0 8px; }
