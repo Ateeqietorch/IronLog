@@ -273,3 +273,7 @@ body:not([data-tab="train"]) .app.resting { padding-bottom: calc(68px + env(safe
 .fs-q { width: 100%; box-sizing: border-box; height: 46px; border-radius: var(--r-control); border: 1px solid var(--seam); background: var(--plate-deep); color: var(--silver); font-size: 17px; padding: 0 12px; margin: 4px 0 8px; }
 .nu-grid.fl-quick { grid-template-columns: repeat(4, 1fr); }
 .nu-grid.fl-quick input { font-size: 17px; padding: 0 8px; }
+.wi-rows { margin: 4px 0 0; padding: 0; background: none; }
+.wi-rows .list-btn.row { padding: 10px 0; min-height: 44px; }
+.wi-rows .list-btn.row:last-child { border-bottom: 0; }
+.wi-rows .r .up, .wi-rows .r .down { margin-left: 6px; font-size: 13px; color: var(--steel); }

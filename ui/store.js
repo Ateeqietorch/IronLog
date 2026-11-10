@@ -8,7 +8,7 @@ import { blockFor } from "../engine/block.js";
 import { resolveDirectives, cleanDirective, mergeDirectives, activeDirectives } from "../engine/directives.js";
 import { mesoWeek } from "../engine/meso.js";
 import { tables } from "../data/sheets.js";
-import { readLog, readBodyweightHistory, writeBodyweight, writeSession, dedupeLog, rowToObject, objectToRow } from "../data/log.js";
+import { readLog, readBodyweightHistory, writeBodyweight, deleteBodyweight, writeSession, dedupeLog, rowToObject, objectToRow } from "../data/log.js";
 import { checkIn, checkInDue, cleanWeights, summary as nutritionSummary } from "../engine/nutrition.js";
 import { sumItems } from "../engine/foods.js";
 import { loadProgram, replaceSlot, updateSlot, insertSlot, saveProgramStorage, readProgramStorage } from "../data/program.js";
@@ -126,7 +126,7 @@ export async function boot({ fixture = null } = {}) {
     try {
       const [rows, ws] = await Promise.all([readLog(), readBodyweightHistory().catch(() => null)]);
       state.rows = rows;
-      state.weights = cleanWeights([...(ws ?? ls.get(K.weights, [])), ...ls.get(K.weightsPending, [])]);
+      state.weights = withPending(ws ?? ls.get(K.weights, []));
       const bw = state.weights.length ? state.weights[state.weights.length - 1].weight : null;
       state.bodyweight = bw;
       ls.set(K.log, rows); if (bw) ls.set(K.bw, bw); ls.set(K.weights, state.weights);
@@ -137,7 +137,7 @@ export async function boot({ fixture = null } = {}) {
       state.offline = true;
       state.rows = ls.get(K.log, []);
       state.bodyweight = ls.get(K.bw, null);
-      state.weights = cleanWeights([...ls.get(K.weights, []), ...ls.get(K.weightsPending, [])]);
+      state.weights = withPending(ls.get(K.weights, []));
     }
   }
   // Sets saved on this phone but not yet in the sheet still count.
@@ -708,6 +708,26 @@ export function setNutrition({ profile, goal, proteinPerLb } = {}) {
   return c;
 }
 
+// Pending weigh-ins not yet in the sheet: { date, weight } to write, or
+// { date, weight: null } to delete that day.
+function withPending(base) {
+  const pend = ls.get(K.weightsPending, []);
+  const gone = new Set(pend.filter((p) => p.weight == null).map((p) => p.date));
+  return cleanWeights([...base.filter((x) => !gone.has(x.date)), ...pend.filter((p) => p.weight != null)]);
+}
+
+export function removeWeight(date) {
+  if (!state.weights.some((x) => x.date === date)) return false;
+  state.weights = state.weights.filter((x) => x.date !== date);
+  state.bodyweight = state.weights.length ? state.weights[state.weights.length - 1].weight : null;
+  ls.set(K.weights, state.weights); ls.set(K.bw, state.bodyweight);
+  ls.set(K.weightsPending, [...ls.get(K.weightsPending, []).filter((x) => x.date !== date), { date, weight: null }]);
+  flushWeights();
+  runCheckIn();
+  emit();
+  return true;
+}
+
 export function logWeight(weight, date = today()) {
   const w = Number(weight);
   if (!(w > 50 && w < 700)) return false;
@@ -731,7 +751,8 @@ export function flushWeights() {
       flushAgain = false;
       for (const p of ls.get(K.weightsPending, [])) {
         try {
-          await writeBodyweight(p.date, p.weight);
+          if (p.weight == null) await deleteBodyweight(p.date);
+          else await writeBodyweight(p.date, p.weight);
           ls.set(K.weightsPending, ls.get(K.weightsPending, []).filter((x) => !(x.date === p.date && x.weight === p.weight)));
         } catch { flushAgain = false; break; }
       }

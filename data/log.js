@@ -54,6 +54,10 @@ export async function writeBodyweight(date, weight, opts) {
   await get("write_bodyweight", { date, weight: String(weight) }, opts);
 }
 
+export async function deleteBodyweight(date, opts) {
+  await get("delete_bodyweight", { date }, opts);
+}
+
 export async function readBodyweight(opts) {
   try {
     const d = await get("read_bodyweight", {}, opts);

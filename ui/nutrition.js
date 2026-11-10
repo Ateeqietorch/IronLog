@@ -1,6 +1,6 @@
 // Macros tab: daily targets, quick weight/food logging, the weight trend,
 // and the weekly check-in that adjusts the targets (engine/nutrition.js).
-import { state, today, nutritionView, setNutrition, logWeight, logIntake, runCheckIn, addMeal, removeMeal, updateMealPortion, saveFood, unsaveFood, isSavedFood } from "./store.js";
+import { state, today, nutritionView, setNutrition, logWeight, removeWeight, logIntake, runCheckIn, addMeal, removeMeal, updateMealPortion, saveFood, unsaveFood, isSavedFood } from "./store.js";
 import { FOODS, CATEGORIES, groceryPlan, SNACK_SWAPS, food, foodMeal, labelMeal, quickMeal, kcalFromMacros, recentMeals, searchFoods } from "../engine/foods.js";
 import { estimateMeal, scaleMeal } from "./meals.js";
 import { GOALS, ACTIVITY, trend } from "../engine/nutrition.js";
@@ -87,6 +87,7 @@ export function renderNutrition(root) {
       <div style="display:flex;justify-content:space-between;align-items:baseline"><span><span class="num" style="font-size:30px;color:var(--silver)">${v.trendWeight ?? "—"}</span> <span class="mut">lb trend</span></span>
       <span class="mut" style="text-align:right;font-size:13px">${v.rate != null ? `${signed(v.rate)} lb/week now` : "Need ~2 weeks of weigh-ins"}<br>goal ${signed(v.goalRate ?? 0)} lb/week</span></div>
       ${spark}
+      ${weighInRows(state.weights, 7)}
       ${onTrack != null ? `<div class="mut" style="font-size:13px;margin-top:6px">${onTrack ? "On track." : `${paceText(v.rate, v.goalRate)} The next check-in adjusts for it.`} ${v.weighIns14} weigh-ins in the last 2 weeks.</div>` : ""}
     </section>`;
 
@@ -117,6 +118,8 @@ export function renderNutrition(root) {
     if (k || p) { logIntake({ kcal: k || null, protein: p || null }); saved.push("food"); }
     toast(saved.length ? `Saved ${saved.join(" and ")}` : "Nothing to save");
   });
+  bindWeighIns(root);
+  root.querySelector("#wi-all")?.addEventListener("click", allWeighInsSheet);
   root.querySelector("#nu-est").addEventListener("click", () => estimate(root));
   root.querySelector("#fl-prev").addEventListener("click", () => { logDate = addDays(logDate, -1); renderNutrition(root); });
   root.querySelector("#fl-next").addEventListener("click", () => { logDate = addDays(logDate, 1); renderNutrition(root); });
@@ -160,6 +163,48 @@ function sparkline(tr) {
   const dots = tr.map((x, i) => (x.weight != null ? `<circle cx="${X(i).toFixed(1)}" cy="${Y(x.weight).toFixed(1)}" r="2" class="sp-dot"/>` : "")).join("");
   return `<svg viewBox="0 0 ${W} ${H}" class="spark" role="img" aria-label="Weight over the last ${tr.length} days: dots are weigh-ins, the line is the trend">${dots}<path d="${line}" class="sp-line"/></svg>
     <div class="mut" style="display:flex;justify-content:space-between;font-size:11px"><span>${esc(fmtDate(tr[0].date))}</span><span>${r1(lo)}–${r1(hi)} lb</span><span>today</span></div>`;
+}
+
+// ── Weigh-in entries ───────────────────────────────────────────────────────
+// Newest first, with the change from the weigh-in before it. Tap to edit.
+function weighInRows(weights, limit = Infinity, title = true) {
+  if (!weights.length) return "";
+  const rows = weights.map((x, i) => ({ ...x, diff: i ? x.weight - weights[i - 1].weight : null })).reverse();
+  const shown = rows.slice(0, limit);
+  const diff = (d) => (d == null || Math.abs(d) < 0.05 ? "" : ` <span class="${d > 0 ? "up" : "down"}">${d > 0 ? "+" : "−"}${Math.abs(d).toFixed(1)}</span>`);
+  return `${title ? `<div class="note-label" style="margin-top:12px">Weigh-ins</div>` : ""}
+    <div class="rows wi-rows">${shown.map((x) => `<button class="list-btn row" data-wi="${esc(x.date)}"><span>${esc(x.date === today() ? "Today" : fmtDate(x.date))}</span><span class="r"><span class="num">${r1(x.weight)}</span> lb${diff(x.diff)}</span></button>`).join("")}</div>
+    ${rows.length > limit ? `<button class="link" id="wi-all" style="margin:8px 0 0">Show all ${rows.length}</button>` : ""}`;
+}
+
+function bindWeighIns(el) {
+  el.querySelectorAll("[data-wi]").forEach((b) => b.addEventListener("click", () => editWeighInSheet(b.dataset.wi)));
+}
+
+function allWeighInsSheet() {
+  const el = sheet(`<h2>Weigh-ins</h2><div class="sub">${state.weights.length} entries. Tap one to change or delete it.</div>
+    <div style="max-height:60vh;overflow-y:auto">${weighInRows(state.weights, Infinity, false)}</div>
+    <button class="secondary" id="wi-close" style="margin-top:12px">Done</button>`);
+  bindWeighIns(el);
+  el.querySelector("#wi-close").addEventListener("click", closeSheet);
+}
+
+function editWeighInSheet(date) {
+  const cur = state.weights.find((x) => x.date === date);
+  if (!cur) return;
+  const el = sheet(`<h2>${esc(date === today() ? "Today" : fmtDate(date))}</h2><div class="sub">Change this weigh-in or remove it.</div>
+    <div class="nu-grid"><label>Weight (lb)<input id="wi-w" inputmode="decimal" value="${cur.weight}" /></label></div>
+    <button class="primary" id="wi-save" style="margin-top:12px"><i class="ti ti-check" aria-hidden="true"></i>Save</button>
+    <button class="secondary" id="wi-del" style="margin-top:8px"><i class="ti ti-trash" aria-hidden="true"></i>Delete</button>`);
+  el.querySelector("#wi-save").addEventListener("click", () => {
+    if (!logWeight(el.querySelector("#wi-w").value.trim(), date)) return toast("Weight looks off");
+    closeSheet(); toast("Weigh-in updated");
+  });
+  el.querySelector("#wi-del").addEventListener("click", () => {
+    removeWeight(date);
+    closeSheet();
+    toast("Weigh-in deleted", { label: "Undo", fn: () => logWeight(cur.weight, date) });
+  });
 }
 
 // ── Setup ──────────────────────────────────────────────────────────────────
