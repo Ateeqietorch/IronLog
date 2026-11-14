@@ -138,3 +138,16 @@ test("switching after some sets keeps those sets and moves the rest to the new e
   assert.equal(t.exercises[2].slotIndex, 1);
   assert.equal(toRows(t).length, 1);
 });
+
+test("a set logged exactly as prescribed leaves the remaining sets alone", () => {
+  for (const [id, E, k] of [["incline-dumbbell-press", 85, 32], ["machine-chest-press", 160, 25], ["machine-chest-press", 200, 30]]) {
+    const d = { key: "A", label: "A", exercises: [{ name: id, exerciseId: id, sets: 4, repRange: [8, 12], unilateral: false, programWeight: 60 }] };
+    let s = buildSession({ day: d, index, models: { [`${id}|both`]: trained(id, E, k) }, date: "2026-09-29", weekInfo: week });
+    const shown = s.exercises[0].plan.sets.map((x) => `${x.load}x${x.reps}`);
+    for (let i = 0; i < 3; i++) {
+      const t = target(s.exercises[0]);
+      s = logSet(s, 0, { load: t.load, reps: t.reps, rir: t.rir });
+    }
+    assert.deepEqual(s.exercises[0].plan.sets.map((x) => `${x.load}x${x.reps}`), shown, id);
+  }
+});

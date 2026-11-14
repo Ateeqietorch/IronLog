@@ -168,8 +168,11 @@ export function logSet(session, exIdx, entry, now = null) {
     const loggedSets = e.logged.map((l) => ({ index: l.index, load: l.load, reps: repsMin(l.reps), rir: l.rir }));
     const common = { exercise: e.ex, loggedSets, date: s.date, repRange: e.slot.repRange, bodyweight: s.bodyweight, gymProfile: s.gymProfile };
     const asPlanned = planned && Number(rec.load) === Number(planned.load) && repsMin(rec.reps) === planned.reps && rec.rir === planned.rir;
-    if (e.coachSet && asPlanned) {
-      // Coach's numbers and it went as planned: keep them.
+    if (asPlanned && e.plan && e.mode !== "manual") {
+      // The set went exactly as prescribed, so the prediction was right and
+      // the sets you were already shown stand. Re-running the model here only
+      // moves numbers on rounding (9 → 8 reps) or swaps the load late in the
+      // exercise, which reads as the app changing its mind for no reason.
     } else if (e.plan && (e.mode === "coached" || e.mode === "calibrating")) {
       // Calibration sets snap the estimate to what you just did (spec §6.3).
       e.plan = recalcRemaining({ ...common, plan: e.plan, model: e.model, models: e.models, gainCap: e.mode === "calibrating" && si === 0 ? 1 : 0.5 });
