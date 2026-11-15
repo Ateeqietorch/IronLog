@@ -79,6 +79,9 @@ input { font: inherit; color: inherit; }
 .set.now .ti, .set.now .right { color: var(--red); }
 .set.todo { color: var(--steel); }
 .set.adjusted .right::after { content: " · adjusted"; }
+.set.warm { background: none; border: 1px dashed var(--steel); color: var(--steel); min-height: 36px; font-size: 14px; }
+.set.warm.done { border-style: solid; opacity: 0.6; }
+.set.warm.done .ti { color: var(--done); }
 .label { font-size: 13px; color: var(--steel); margin: 10px 0 6px; }
 .chips { display: flex; gap: 6px; }
 .chip { flex: 1; height: 40px; min-width: 44px; border-radius: var(--r-control); border: 1px solid var(--seam); background: var(--plate); font-weight: 500; display: flex; align-items: center; justify-content: center; }

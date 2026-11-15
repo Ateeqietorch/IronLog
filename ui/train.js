@@ -11,6 +11,7 @@ import { resolveExercise } from "../engine/catalog.js";
 import { statusLine } from "../engine/meso.js";
 import { esc, sheet, closeSheet, toast, buzz, fmtDate } from "./dom.js";
 import { startRest, primeAlerts } from "./rest.js";
+import { warmupSets, warmMuscles } from "../engine/warmup.js";
 
 let chosenRir = null; // reps-in-reserve chip for the set on screen
 
@@ -148,6 +149,8 @@ function nowCard(s, e) {
     return `<div class="set todo${p?.adjusted ? " adjusted" : ""}"><i class="ti ti-circle" aria-hidden="true"></i><span>${txt}</span><span class="right">${i === e.sets - 1 ? "more is fine" : ""}</span></div>`;
   }).join("");
 
+  const warmRows = warmupRows(s, e, t, done || manualFirst);
+
   // "4+" covers any plan of 4 or more reps in reserve (deloads, first session back).
   const chips = effortChips("rir", chosenRir);
   const btnLabel = manualFirst ? `Enter set 1` : chosenRir === plannedRir ? "Done as planned" : `Log set ${si + 1}`;
@@ -174,6 +177,7 @@ function nowCard(s, e) {
     ${reasonText ? `<button class="reason" id="why"><i class="ti ${icon}" aria-hidden="true"></i><span>${esc(reasonText)}</span></button>` : ""}
     ${technique}
     ${done ? "" : sorenessAsk(s, e)}
+    ${warmRows}
     <div class="sets">${rows}</div>
     ${done ? afterAsk(s, e, s.cur) : ""}
     ${e.stopped ? `<div class="label stopped"><i class="ti ti-hand-stop" aria-hidden="true"></i> ${e.logged.length ? `Stopped after ${e.logged.length} of ${e.stopped.of} sets` : "Skipped"}</div>` : ""}
@@ -194,6 +198,21 @@ function nowCard(s, e) {
       <button class="link" id="stop-btn"><i class="ti ti-hand-stop" aria-hidden="true"></i>${e.logged.length ? "End exercise here" : "Skip exercise"}</button>
     </div>`}
   </section>`;
+}
+
+// Warm-ups: shown until the first working set is logged. Tap to tick off;
+// they're never saved to the sheet or counted as hard sets.
+function warmupRows(s, e, t, skip) {
+  if (skip || e.logged.length || t.load == null) return "";
+  const warm = warmMuscles(s.exercises.slice(0, s.cur));
+  const list = warmupSets({ exercise: e.ex, workLoad: t.load, bodyweight: s.bodyweight, gymProfile: s.gymProfile, warm, deload: !!s.weekInfo?.deload });
+  if (!list.length) return "";
+  const ticked = new Set(e.warmupsDone ?? []);
+  const items = list.map((w, i) => {
+    const on = ticked.has(i);
+    return `<button class="set warm${on ? " done" : ""}" data-warm="${i}" aria-pressed="${on}"><i class="ti ${on ? "ti-circle-check" : "ti-flame"}" aria-hidden="true"></i><span>${w.bodyweight ? "Bodyweight" : fmt(w.load)} × ${w.reps}</span><span class="right">${on ? "done" : "easy, no rest needed"}</span></button>`;
+  }).join("");
+  return `<div class="label">Warm-up <span class="mut">(not logged)</span></div><div class="sets warmups">${items}</div><div class="label">Working sets</div>`;
 }
 
 // ── Last time ──────────────────────────────────────────────────────────────
@@ -357,6 +376,16 @@ function bind(root, s) {
     renderTrain(root);
   }));
   root.querySelectorAll("[data-jump]").forEach((b) => b.addEventListener("click", () => setSession({ ...s, cur: Number(b.dataset.jump) })));
+  root.querySelectorAll("[data-warm]").forEach((b) => b.addEventListener("click", () => {
+    const i = Number(b.dataset.warm);
+    const ex = s.exercises.map((x, j) => {
+      if (j !== s.cur) return x;
+      const on = new Set(x.warmupsDone ?? []);
+      on.has(i) ? on.delete(i) : on.add(i);
+      return { ...x, warmupsDone: [...on] };
+    });
+    setSession({ ...s, exercises: ex });
+  }));
   root.querySelectorAll("[data-edit]").forEach((b) => b.addEventListener("click", () => editSheet(Number(b.dataset.edit))));
   root.querySelector("#why")?.addEventListener("click", whySheet);
   root.querySelector("#last-btn")?.addEventListener("click", lastTimeSheet);
