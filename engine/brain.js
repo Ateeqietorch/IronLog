@@ -308,9 +308,17 @@ export function planExercise({ ex, slot, nSets, date, sets, models = {}, block, 
   const repRange = effectiveRange(slot?.repRange, ex, dir);
   const history = exerciseHistory(sets.filter((s) => s.date < date), ex.id);
   const model = models[`${ex.id}|both`] ?? models[`${ex.id}|L`] ?? models[`${ex.id}|R`] ?? null;
+  // Calibration test set: the first time this exercise comes up in a new
+  // block (week 1), after 17+ days away from it, or when you or the coach
+  // ask for one (directives.calibrate: true, or a list of exercise ids).
+  const lastDate = history[history.length - 1]?.date ?? null;
+  const firstInBlock = !block.deload && block.week === 1 && block.start && lastDate && lastDate < block.start;
+  const longGap = lastDate && daysBetween(lastDate, date) > 16;
+  const asked = dir.calibrate === true || (Array.isArray(dir.calibrate) && dir.calibrate.includes(ex.id));
   const decision = decide({
     ex, history, model, repRange, rir, sets: nSets ?? slot?.sets ?? 3, date, gymProfile, bodyweight, policy: dir.progression ?? "balanced",
     techniques: dir.techniques ?? {}, finalWeek: isFinalWeek(block), deload: block.deload, muscleGapDays,
+    calibrate: !!(firstInBlock || longGap || asked),
   });
   return { sets: decision.sets?.length ?? nSets ?? slot?.sets ?? 3, rir, repRange, decision, history: history.slice(-3), label: leverLabel(decision) };
 }

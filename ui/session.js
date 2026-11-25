@@ -67,7 +67,7 @@ export function decisionToPlan(d, { ex, rir, models: found = {}, bodyweight = nu
     side = live[0]?.[0] ?? null;
   }
   const model = m ?? (side ? found.models[side] : null);
-  const sets = d.sets.map((x) => ({ index: x.index, load: x.load, reps: x.reps, rir: x.rir, last: !!x.last, ...(x.backoff ? { backoff: true } : {}) }));
+  const sets = d.sets.map((x) => ({ index: x.index, load: x.load, reps: x.reps, rir: x.rir, last: !!x.last, ...(x.backoff ? { backoff: true } : {}), ...(x.test ? { test: true } : {}) }));
   return {
     load: d.load, effLoad: toEffective(ex, d.load, bodyweight ?? 0), sets, lever: d.lever, technique: d.reason?.technique ?? null,
     reason: { ...d.reason, rir, baseRir: rir, e1rm: model?.logE1rm != null ? Math.round(e1rm(model) * 10) / 10 : null, changePct: null, load: d.load, side, outOfRange: false },
@@ -86,7 +86,9 @@ export function planOne({ slot, ex, models, date, weekInfo, bodyweight = null, p
     return { ...p, rir: it.rir, repRange: it.repRange, sets: p.plan?.sets.length ?? it.sets, lever: "calibrate", label: "Calibrate" };
   }
   const plan = decisionToPlan(d, { ex, rir: it.rir, models: found, bodyweight });
-  return { plan, mode: "coached", ...found, rir: it.rir, repRange: it.repRange, sets: plan.sets.length, lever: d.lever, label: it.label };
+  // A test set snaps today's estimate to what you actually do (gainCap 1 on set 1).
+  const mode = d.reason?.test ? "calibrating" : "coached";
+  return { plan, mode, ...found, rir: it.rir, repRange: it.repRange, sets: plan.sets.length, lever: d.lever, label: d.reason?.test ? "Test set" : it.label };
 }
 
 export function buildSession({ day, index, models, date, weekInfo, bodyweight = null, policy = "balanced", gymProfile = null, brain = null, ctx = null }) {

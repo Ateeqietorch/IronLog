@@ -145,8 +145,8 @@ function nowCard(s, e) {
     if (l) return `<button class="set done" data-edit="${i}"><i class="ti ti-circle-check" aria-hidden="true"></i><span>${fmt(l.load)} × ${repsText(l.reps)}</span><span class="right">${l.rir} left</span></button>`;
     const p = e.plan?.sets?.[i];
     const txt = p ? `${fmt(p.load)} × ${p.reps}` : "—";
-    if (i === e.logged.length) return `<div class="set now${p?.adjusted ? " adjusted" : ""}"><i class="ti ti-player-play" aria-hidden="true"></i><span>${txt}</span><span class="right">Now</span></div>`;
-    return `<div class="set todo${p?.adjusted ? " adjusted" : ""}"><i class="ti ti-circle" aria-hidden="true"></i><span>${txt}</span><span class="right">${i === e.sets - 1 ? "more is fine" : ""}</span></div>`;
+    if (i === e.logged.length) return `<div class="set now${p?.adjusted ? " adjusted" : ""}"><i class="ti ti-player-play" aria-hidden="true"></i><span>${txt}</span><span class="right">${p?.test ? "Test · 1 left" : "Now"}</span></div>`;
+    return `<div class="set todo${p?.adjusted ? " adjusted" : ""}"><i class="ti ti-circle" aria-hidden="true"></i><span>${txt}</span><span class="right">${p?.test ? "test set" : i === e.sets - 1 ? "more is fine" : ""}</span></div>`;
   }).join("");
 
   const warmRows = warmupRows(s, e, t, done || manualFirst);

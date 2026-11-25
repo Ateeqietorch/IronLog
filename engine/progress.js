@@ -68,7 +68,21 @@ export function stallCount(history, k = 30) {
   return n;
 }
 
-const rirClamp = (rir, r) => Math.max(Math.max(0, r - 1), Math.min(r + 2, rir ?? r));
+// Logged reps in reserve, for estimating strength. Optimistic ratings are
+// capped at two above today's target (self-rated RIR runs generous), but a
+// set rated harder than the target is taken at its word: clamping it up to
+// the target overstated strength and inflated the next prescription.
+const rirClamp = (rir, r) => Math.max(0, Math.min(r + 2, rir ?? r));
+
+// Reps to add or remove because today's effort target differs from how hard
+// last time was. 100×8 with 1–2 left, then a target of 3 left, is about 1.5
+// reps fewer at the same weight before any progression. Easier-than-target
+// sets earn at most 2 extra (ratings run generous); harder ones count fully.
+export function rirShift(loggedRir, r) {
+  if (loggedRir == null || loggedRir === "" || Number.isNaN(Number(loggedRir))) return 0;
+  const d = Number(loggedRir) - r;
+  return Math.max(-4, Math.min(2, d));
+}
 
 // Candidate loads with their effective weight, lightest effective first.
 function candidates(ex, ladder, bodyweight) {
@@ -84,7 +98,7 @@ const repsAt = (E, eff, k, decay, i, r) => Math.round(k * ((E * decay ** i) / ef
 // rir: target reps in reserve today; sets: how many sets the brain allocated.
 export function decide({ ex, history, model = null, repRange, rir = 2, sets: nSets = 3, date, gymProfile = null, ladder = null,
   bodyweight = null, policy = "balanced", techniques = { "myo-reps": true, "lengthened-partials": true }, finalWeek = false, deload = false,
-  muscleGapDays = null }) {
+  muscleGapDays = null, calibrate = false }) {
   if (!history?.length) return { lever: "calibrate", text: "No history on this one yet, so set 1 is a calibration set a little short of failure; the rest of today's sets are set from it.", reason: { lever: "calibrate", range: repRange, rir } };
   const k = model?.k ?? defaultK(ex.kClass);
   const decay = Math.min(0.99, Math.max(0.94, model?.fatigueDecay && model.fatigueDecay < 1 ? model.fatigueDecay : DEFAULT_DECAY));
@@ -143,7 +157,11 @@ export function decide({ ex, history, model = null, repRange, rir = 2, sets: nSe
       const add = grind ? 0 : inc;
       // Lighter (ramp-up or back-off) sets aren't held to the top of the range.
       const c = b.load < topLoad ? Math.max(cap, b.reps) : cap;
-      out.push({ index: i, load: b.load, reps: Math.max(1, Math.min(c, b.reps + add + extra)), rir: r });
+      // Same weight, same effort-adjusted capacity: last reps + reps left
+      // last time − reps left today, then the progression on top. Rounded
+      // down so the target never asks for more than you showed.
+      const reps = Math.floor(b.reps + rirShift(b.rir, r) + add + extra);
+      out.push({ index: i, load: b.load, reps: Math.max(1, Math.min(c, reps)), rir: r });
     }
     // Keep sets in the range: a set that would fall under it gets a lighter load.
     const t0 = out.find((x) => x.load === topLoad) ?? out[0];
@@ -162,13 +180,27 @@ export function decide({ ex, history, model = null, repRange, rir = 2, sets: nSe
   const result = (lever, setsOut, text, extra = {}) => {
     const s = setsOut.map((x, i) => ({ ...x, last: i === setsOut.length - 1 }));
     if (finalWeek && isolation && r <= 1) s[s.length - 1] = { ...s[s.length - 1], rir: 0 };
+    // Calibration: set 1 is a test set taken to about 1 rep left at the same
+    // weight. The sets after it are recalculated from what you actually do.
+    if (calibrate && !["deload", "recalibrate"].includes(lever) && s.length > 1) {
+      const testRir = Math.max(0, Math.min(1, r));
+      const t = s[0];
+      s[0] = { ...t, reps: Math.max(1, t.reps + Math.max(0, (t.rir ?? r) - testRir)), rir: testRir, test: true };
+      text = `${text} Set 1 is a test set: take it to about ${testRir} rep${testRir === 1 ? "" : "s"} left, and the rest of today is set from what you actually do.`;
+      extra = { ...extra, test: true };
+    }
     return { lever, load: s[0].load, sets: s, text, reason: { ...base, lever, ...extra } };
   };
 
   // Deload: same weights, reps well short of failure, half the sets (the
   // brain halves the count).
   if (deload) {
-    const setsOut = anchored(0).map((s) => ({ ...s, reps: Math.max(Math.min(lo, s.reps), s.reps - 3), rir: 4 }));
+    // anchored() at the deload target already takes reps off for the extra
+    // reps in reserve; cap the cut at 3 so it stays a real stimulus.
+    const setsOut = anchored(0).map((s, i) => {
+      const b = last.sets[Math.min(i, last.sets.length - 1)];
+      return { ...s, reps: Math.max(Math.min(lo, b.reps), b.reps - 3, s.reps), rir: Math.max(4, r) };
+    });
     return result("deload", setsOut, `Deload: same weights as last time, about 4 reps short of failure, half the sets. Recovery is the point this week.`);
   }
   // Away a while: be conservative and let set 1 recalibrate.
@@ -239,13 +271,19 @@ export function decide({ ex, history, model = null, repRange, rir = 2, sets: nSe
     return result("hold", setsOut, `Set 1 went to failure last time, so same numbers today and own them: ${fmt(setsOut)}.`);
   }
 
-  const inc = easy ? 2 : 1;
+  // Easier-than-target sets already earn extra reps through rirShift, so the
+  // progression itself is always one rep.
+  const inc = 1;
   const setsOut = anchored(inc);
+  const shift = rirShift(top.rir, r);
   const technique = stalls >= 2 ? pickTechnique(ex, techniques) : null;
   if (technique) {
     return result("intensify", setsOut, `No progress for ${stalls} sessions, so same plan plus ${technique === "myo-reps" ? "myo-reps after the last set (rest 15 s, 3–5 reps, repeat 3×)" : "long-length partials after the last set (half reps in the stretched half until failure)"}: ${fmt(setsOut)}.`, { technique });
   }
-  return result("add-reps", setsOut, `${easy ? "Last time looked easy, so two more reps" : "One more rep than last time"}: ${fmt(setsOut)}.`, { inc });
+  const why = shift <= -1
+    ? `Last time you had ${top.rir} left; today's target is ${r} left, so fewer reps at the same weight, plus one for progress`
+    : shift >= 1 ? `Last time looked easier than today's target (${top.rir} left vs ${r}), so more reps` : "One more rep than last time";
+  return result("add-reps", setsOut, `${why}: ${fmt(setsOut)}.`, { inc: Math.max(...setsOut.map((x, i) => x.reps - (last.sets[Math.min(i, last.sets.length - 1)]?.reps ?? x.reps))), shift });
 }
 
 // Myo-reps suit machines and cables; long-length partials suit exercises that

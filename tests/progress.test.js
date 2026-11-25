@@ -46,7 +46,8 @@ test("a failed first set holds the numbers instead of adding", () => {
   const h = [sess("2026-10-20", [S(100, 8, 0), S(100, 7, 0)])];
   const d = decide({ ex: ex("chest-supported-t-bar-row"), history: h, repRange: [6, 10], rir: 2, sets: 2, date: "2026-10-27" });
   assert.equal(d.lever, "hold");
-  assert.deepEqual(d.sets.map((s) => s.reps), [8, 7]);
+  // Same weight; 0 left last time vs 2 left today = 2 fewer reps, no progression.
+  assert.deepEqual(d.sets.map((s) => [s.load, s.reps]), [[100, 6], [100, 5]]);
 });
 
 test("one session under the range holds; two in a row backs off", () => {
@@ -77,9 +78,11 @@ test("a ramp (light first set) uses the heaviest load as the top set", () => {
   const h = [sess("2026-10-20", [S(165, 12), S(180, 10), S(180, 8, 0), S(150, 14)])];
   const d = decide({ ex: ex("seated-leg-curl"), history: h, repRange: [8, 12], rir: 2, sets: 4, date: "2026-10-27" });
   assert.equal(d.lever, "add-reps");
-  assert.deepEqual(d.sets.map((s) => s.load), [165, 180, 180, 150]);
+  assert.deepEqual(d.sets.slice(0, 2).map((s) => s.load), [165, 180]);
   assert.equal(d.sets[1].reps, 11);
-  assert.equal(d.sets[2].reps, 8); // that set failed last time: hold it
+  // Set 3 failed last time (180×8, 0 left). With 2 left today that's ~6 at 180,
+  // under the range, so it drops to a lighter back-off weight instead.
+  assert.ok(d.sets[2].load < 180 && d.sets[2].reps >= 7 && d.sets[2].backoff, JSON.stringify(d.sets));
 });
 
 test("sets that would fall under the range drop to a lighter back-off load", () => {
@@ -133,4 +136,33 @@ test("unilateral history merges sides into the weaker side's reps", () => {
   const h = exerciseHistory(sets, "single-leg-press");
   assert.equal(h.length, 1);
   assert.equal(h[0].sets[0].reps, 9);
+});
+
+test("a higher effort target never hides a strength jump: 100×8 with 1–2 left, then 3 left", () => {
+  const h = [sess("2026-11-11", [S(100, 8, 1.5), S(100, 8, 1.5), S(100, 8, 1.5)])];
+  const d = decide({ ex: ex("seated-leg-curl"), history: h, repRange: [8, 12], rir: 3, sets: 3, date: "2026-11-18" });
+  assert.equal(d.lever, "add-reps");
+  // Shown capacity was ~9.5 reps. Asking for 9–10 with 3 left would assume 12–13.
+  for (const s of d.sets) {
+    assert.equal(s.load, 100);
+    assert.ok(s.reps + s.rir <= 8 + 1.5 + 1, JSON.stringify(d.sets));
+  }
+  assert.match(d.text, /today's target is 3 left/);
+});
+
+test("same effort target: still one more rep", () => {
+  const h = [sess("2026-11-11", [S(100, 8, 2), S(100, 8, 2)])];
+  const d = decide({ ex: ex("seated-leg-curl"), history: h, repRange: [8, 12], rir: 2, sets: 2, date: "2026-11-18" });
+  assert.deepEqual(d.sets.map((s) => s.reps), [9, 9]);
+});
+
+test("calibrate: set 1 becomes a test set at about 1 left, later sets keep today's target", () => {
+  const h = [sess("2026-11-11", [S(100, 8, 2), S(100, 8, 2), S(100, 8, 2)])];
+  const d = decide({ ex: ex("seated-leg-curl"), history: h, repRange: [8, 12], rir: 3, sets: 3, date: "2026-11-18", calibrate: true });
+  assert.equal(d.sets[0].test, true);
+  assert.equal(d.sets[0].rir, 1);
+  assert.equal(d.sets[0].reps, d.sets[1].reps + 2);
+  assert.ok(d.sets.slice(1).every((s) => s.rir === 3 && !s.test));
+  assert.equal(d.reason.test, true);
+  assert.match(d.text, /test set/);
 });
